@@ -38,6 +38,7 @@ import com.builttoroam.devicecalendar.common.Constants.Companion as Cst
 import com.builttoroam.devicecalendar.common.ErrorCodes.Companion as EC
 import com.builttoroam.devicecalendar.common.ErrorMessages.Companion as EM
 import org.dmfs.rfc5545.recur.Freq as RruleFreq
+import org.dmfs.rfc5545.recur.InvalidRecurrenceRuleException
 import org.dmfs.rfc5545.recur.RecurrenceRule as Rrule
 import android.provider.CalendarContract.Colors
 import androidx.collection.SparseArrayCompat
@@ -969,7 +970,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (recurrenceRuleString == null) {
             return null
         }
-        val rfcRecurrenceRule = Rrule(recurrenceRuleString)
+        val rfcRecurrenceRule = try {
+            Rrule(recurrenceRuleString)
+        } catch (e: InvalidRecurrenceRuleException) {
+            // Malformed RRULE (e.g. missing FREQ part) — skip recurrence rather than crash
+            return null
+        }
         val frequency = when (rfcRecurrenceRule.freq) {
             RruleFreq.YEARLY -> RruleFreq.YEARLY
             RruleFreq.MONTHLY -> RruleFreq.MONTHLY
@@ -1017,6 +1023,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
         return recurrenceRule
     }
+
 
     private fun formatDateTime(dateTime: DateTime): String {
         assert(dateTime.year in 0..9999)
