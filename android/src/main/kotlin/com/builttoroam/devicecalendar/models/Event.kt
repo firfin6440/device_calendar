@@ -4,6 +4,9 @@ class Event {
     var eventTitle: String? = null
     var eventId: String? = null
     var calendarId: String? = null
+    var eventIsDetached: Boolean = false
+    var eventOriginalStartDate: Long? = null
+    var originalEventId: String? = null
     var eventDescription: String? = null
     var eventStartDate: Long? = null
     var eventEndDate: Long? = null

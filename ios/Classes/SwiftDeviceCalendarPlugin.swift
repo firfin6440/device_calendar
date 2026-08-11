@@ -37,6 +37,9 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
     struct Event: Codable {
         let eventId: String
         let calendarId: String
+        let eventIsDetached: Bool
+        let eventOriginalStartDate: Int64?
+        let originalEventId: String?
         let eventTitle: String
         let eventDescription: String?
         let eventStartDate: Int64
@@ -107,6 +110,8 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
     let hasPermissionsMethod = "hasPermissions"
     let retrieveCalendarsMethod = "retrieveCalendars"
     let retrieveEventsMethod = "retrieveEvents"
+    let retrieveMasterEventMethod = "retrieveMasterEvent"
+    let updateAttendeeStatusMethod = "updateAttendeeStatus"
     let retrieveSourcesMethod = "retrieveSources"
     let createOrUpdateEventMethod = "createOrUpdateEvent"
     let createCalendarMethod = "createCalendar"
@@ -173,6 +178,13 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
             retrieveCalendars(result)
         case retrieveEventsMethod:
             retrieveEvents(call, result)
+        case retrieveMasterEventMethod:
+            retrieveMasterEvent(call, result)
+        case updateAttendeeStatusMethod:
+            result(FlutterError(
+                code: self.notAllowed,
+                message: "EventKit does not support updating attendee RSVP status",
+                details: nil))
         case createOrUpdateEventMethod:
             createOrUpdateEvent(call, result)
         case deleteEventMethod:
@@ -425,6 +437,30 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
         }, result: result)
     }
 
+    private func retrieveMasterEvent(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+        checkPermissionsThenExecute(permissionsGrantedAction: {
+            guard let arguments = call.arguments as? Dictionary<String, AnyObject>,
+                  let calendarId = arguments[self.calendarIdArgument] as? String,
+                  let eventId = arguments[self.eventIdArgument] as? String else {
+                result(FlutterError(
+                    code: self.genericError,
+                    message: "A calendar ID and event ID are required",
+                    details: nil))
+                return
+            }
+
+            guard let ekEvent = self.eventStore.event(withIdentifier: eventId) else {
+                self.finishWithEventNotFoundError(result: result, eventId: eventId)
+                return
+            }
+
+            let event = self.createEventFromEkEvent(
+                calendarId: calendarId,
+                ekEvent: ekEvent)
+            self.encodeJsonAndFinish(codable: event, result: result)
+        }, result: result)
+    }
+
     private func createEventFromEkEvent(calendarId: String, ekEvent: EKEvent) -> Event {
         var attendees = [Attendee]()
         if ekEvent.attendees != nil {
@@ -449,6 +485,11 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
         let event = Event(
             eventId: ekEvent.eventIdentifier,
             calendarId: calendarId,
+            eventIsDetached: ekEvent.isDetached,
+            eventOriginalStartDate: ekEvent.isDetached
+                ? ekEvent.occurrenceDate.map { Int64($0.millisecondsSinceEpoch) }
+                : nil,
+            originalEventId: nil,
             eventTitle: ekEvent.title ?? "New Event",
             eventDescription: ekEvent.notes,
             eventStartDate: Int64(ekEvent.startDate.millisecondsSinceEpoch),

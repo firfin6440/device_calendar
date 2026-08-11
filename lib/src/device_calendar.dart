@@ -119,6 +119,105 @@ class DeviceCalendarPlugin {
             ));
   }
 
+  /// Retrieves the master event of a detached recurring-event occurrence.
+  ///
+  /// Returns an unsuccessful [Result] when [detachedEvent] is not detached or
+  /// does not contain the identifiers required by the current platform.
+  Future<Result<Event>> retrieveMasterEvent(Event? detachedEvent) async {
+    return _invokeChannelMethod(
+      ChannelConstants.methodNameRetrieveMasterEvent,
+      assertParameters: (result) {
+        _validateCalendarIdParameter(result, detachedEvent?.calendarId);
+        _assertParameter(
+          result,
+          detachedEvent?.isDetached == true &&
+              (detachedEvent?.eventId?.isNotEmpty ?? false) &&
+              (!Platform.isAndroid ||
+                  (detachedEvent?.originalEventId?.isNotEmpty ?? false)),
+          ErrorCodes.invalidArguments,
+          'A detached event with valid event identifiers is required.',
+        );
+      },
+      arguments: () => <String, Object?>{
+        ChannelConstants.parameterNameCalendarId: detachedEvent?.calendarId,
+        ChannelConstants.parameterNameEventId: detachedEvent?.eventId,
+        ChannelConstants.parameterNameOriginalEventId:
+            detachedEvent?.originalEventId,
+      },
+      evaluateResponse: (rawData) => Event.fromJson(json.decode(rawData)),
+    );
+  }
+
+  /// Updates one attendee's RSVP status without rewriting the event.
+  ///
+  /// Android only. The update succeeds only when the stored status still
+  /// matches [expectedStatus]. This prevents overwriting a concurrent change.
+  Future<Result<AttendeeStatusUpdateResult>> updateAttendeeStatus({
+    required String? calendarId,
+    required String? eventId,
+    required String? attendeeEmail,
+    required AndroidAttendanceStatus? expectedStatus,
+    required AndroidAttendanceStatus? newStatus,
+  }) async {
+    return _invokeChannelMethod(
+      ChannelConstants.methodNameUpdateAttendeeStatus,
+      assertParameters: (result) {
+        _validateCalendarIdParameter(result, calendarId);
+        _assertParameter(
+          result,
+          (eventId?.isNotEmpty ?? false) &&
+              (attendeeEmail?.isNotEmpty ?? false) &&
+              expectedStatus != null &&
+              newStatus != null,
+          ErrorCodes.invalidArguments,
+          'Event ID, attendee email, expected status and new status are required.',
+        );
+      },
+      arguments: () => <String, Object?>{
+        ChannelConstants.parameterNameCalendarId: calendarId,
+        ChannelConstants.parameterNameEventId: eventId,
+        ChannelConstants.parameterNameAttendeeEmail: attendeeEmail,
+        ChannelConstants.parameterNameExpectedAttendeeStatus:
+            expectedStatus?.index,
+        ChannelConstants.parameterNameNewAttendeeStatus: newStatus?.index,
+      },
+      evaluateResponse: (rawData) {
+        final Map<Object?, Object?> response =
+            Map<Object?, Object?>.from(rawData as Map);
+        final Object? currentStatusIndex = response['currentStatus'];
+        if (currentStatusIndex is! int ||
+            currentStatusIndex < 0 ||
+            currentStatusIndex >= AndroidAttendanceStatus.values.length) {
+          throw FormatException(
+            'Invalid attendee status update response: $rawData',
+          );
+        }
+
+        final AttendeeStatusUpdateOutcome outcome;
+        switch (response['outcome']) {
+          case 'updated':
+            outcome = AttendeeStatusUpdateOutcome.updated;
+            break;
+          case 'alreadyCurrent':
+            outcome = AttendeeStatusUpdateOutcome.alreadyCurrent;
+            break;
+          case 'conflict':
+            outcome = AttendeeStatusUpdateOutcome.conflict;
+            break;
+          default:
+            throw FormatException(
+              'Unknown attendee status update result: $rawData',
+            );
+        }
+
+        return AttendeeStatusUpdateResult(
+          outcome: outcome,
+          currentStatus: AndroidAttendanceStatus.values[currentStatusIndex],
+        );
+      },
+    );
+  }
+
   /// Deletes an event from a calendar. For a recurring event, this will delete all instances of it.\
   /// To delete individual instance of a recurring event, please use [deleteEventInstance()]
   ///
@@ -400,7 +499,8 @@ class DeviceCalendarPlugin {
     final result = await _invokeChannelMethod(
       ChannelConstants.methodNameUpdateCalendarColor,
       arguments: () => <String, dynamic>{
-        ChannelConstants.parameterNameCalendarId: Platform.isAndroid ? int.tryParse(calendarId) : calendarId,
+        ChannelConstants.parameterNameCalendarId:
+            Platform.isAndroid ? int.tryParse(calendarId) : calendarId,
         ChannelConstants.parameterNameCalendarColorKey: calendarColor?.colorKey,
         ChannelConstants.parameterNameCalendarColor: color?.value,
       },

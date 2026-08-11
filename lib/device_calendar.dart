@@ -2,6 +2,7 @@ library device_calendar;
 
 export 'src/common/calendar_enums.dart';
 export 'src/models/attendee.dart';
+export 'src/models/attendee_status_update_result.dart';
 export 'src/models/calendar.dart';
 export 'src/models/result.dart';
 export 'src/models/reminder.dart';

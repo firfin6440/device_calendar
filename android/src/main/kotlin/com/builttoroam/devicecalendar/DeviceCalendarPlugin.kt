@@ -13,13 +13,13 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import org.dmfs.rfc5545.recur.Freq
 
-const val CHANNEL_NAME = "plugins.builttoroam.com/device_calendar"
-
 // Methods
 private const val REQUEST_PERMISSIONS_METHOD = "requestPermissions"
 private const val HAS_PERMISSIONS_METHOD = "hasPermissions"
 private const val RETRIEVE_CALENDARS_METHOD = "retrieveCalendars"
 private const val RETRIEVE_EVENTS_METHOD = "retrieveEvents"
+private const val RETRIEVE_MASTER_EVENT_METHOD = "retrieveMasterEvent"
+private const val UPDATE_ATTENDEE_STATUS_METHOD = "updateAttendeeStatus"
 private const val DELETE_EVENT_METHOD = "deleteEvent"
 private const val DELETE_EVENT_INSTANCE_METHOD = "deleteEventInstance"
 private const val CREATE_OR_UPDATE_EVENT_METHOD = "createOrUpdateEvent"
@@ -37,6 +37,10 @@ private const val START_DATE_ARGUMENT = "startDate"
 private const val END_DATE_ARGUMENT = "endDate"
 private const val EVENT_IDS_ARGUMENT = "eventIds"
 private const val EVENT_ID_ARGUMENT = "eventId"
+private const val ORIGINAL_EVENT_ID_ARGUMENT = "originalEventId"
+private const val ATTENDEE_EMAIL_ARGUMENT = "attendeeEmail"
+private const val EXPECTED_ATTENDEE_STATUS_ARGUMENT = "expectedAttendeeStatus"
+private const val NEW_ATTENDEE_STATUS_ARGUMENT = "newAttendeeStatus"
 private const val EVENT_TITLE_ARGUMENT = "eventTitle"
 private const val EVENT_LOCATION_ARGUMENT = "eventLocation"
 private const val EVENT_URL_ARGUMENT = "eventURL"
@@ -87,7 +91,10 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
-        channel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_NAME)
+        channel = MethodChannel(
+            flutterPluginBinding.binaryMessenger,
+            "plugins.builttoroam.com/device_calendar"
+        )
         channel.setMethodCallHandler(this)
         _calendarDelegate = CalendarDelegate(null, context!!)
     }
@@ -133,6 +140,26 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 val endDate = call.argument<Long>(END_DATE_ARGUMENT)
                 val eventIds = call.argument<List<String>>(EVENT_IDS_ARGUMENT) ?: listOf()
                 _calendarDelegate.retrieveEvents(calendarId!!, startDate, endDate, eventIds, result)
+            }
+            RETRIEVE_MASTER_EVENT_METHOD -> {
+                val calendarId = call.argument<String>(CALENDAR_ID_ARGUMENT)
+                val originalEventId = call.argument<String>(ORIGINAL_EVENT_ID_ARGUMENT)
+                _calendarDelegate.retrieveMasterEvent(calendarId!!, originalEventId!!, result)
+            }
+            UPDATE_ATTENDEE_STATUS_METHOD -> {
+                val calendarId = call.argument<String>(CALENDAR_ID_ARGUMENT)
+                val eventId = call.argument<String>(EVENT_ID_ARGUMENT)
+                val attendeeEmail = call.argument<String>(ATTENDEE_EMAIL_ARGUMENT)
+                val expectedStatus = call.argument<Int>(EXPECTED_ATTENDEE_STATUS_ARGUMENT)
+                val newStatus = call.argument<Int>(NEW_ATTENDEE_STATUS_ARGUMENT)
+                _calendarDelegate.updateAttendeeStatus(
+                    calendarId!!,
+                    eventId!!,
+                    attendeeEmail!!,
+                    expectedStatus!!,
+                    newStatus!!,
+                    result
+                )
             }
             CREATE_OR_UPDATE_EVENT_METHOD -> {
                 val calendarId = call.argument<String>(CALENDAR_ID_ARGUMENT)

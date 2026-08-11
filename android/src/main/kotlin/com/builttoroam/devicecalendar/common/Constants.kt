@@ -52,6 +52,8 @@ class Constants {
         const val EVENT_PROJECTION_STATUS_INDEX: Int = 14
         const val EVENT_PROJECTION_EVENT_COLOR_INDEX: Int = 15
         const val EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX: Int = 16
+        const val EVENT_PROJECTION_ORIGINAL_ID_INDEX: Int = 17
+        const val EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX: Int = 18
 
         val EVENT_PROJECTION: Array<String> = arrayOf(
                 CalendarContract.Instances.EVENT_ID,
@@ -70,7 +72,47 @@ class Constants {
                 CalendarContract.Events.AVAILABILITY,
                 CalendarContract.Events.STATUS,
                 CalendarContract.Events.EVENT_COLOR,
-                CalendarContract.Events.EVENT_COLOR_KEY
+                CalendarContract.Events.EVENT_COLOR_KEY,
+                CalendarContract.Events.ORIGINAL_ID,
+                CalendarContract.Events.ORIGINAL_INSTANCE_TIME
+        )
+
+        const val MASTER_EVENT_PROJECTION_ID_INDEX: Int = 0
+        const val MASTER_EVENT_PROJECTION_CALENDAR_ID_INDEX: Int = 1
+        const val MASTER_EVENT_PROJECTION_TITLE_INDEX: Int = 2
+        const val MASTER_EVENT_PROJECTION_DESCRIPTION_INDEX: Int = 3
+        const val MASTER_EVENT_PROJECTION_START_INDEX: Int = 4
+        const val MASTER_EVENT_PROJECTION_END_INDEX: Int = 5
+        const val MASTER_EVENT_PROJECTION_DURATION_INDEX: Int = 6
+        const val MASTER_EVENT_PROJECTION_RECURRING_RULE_INDEX: Int = 7
+        const val MASTER_EVENT_PROJECTION_ALL_DAY_INDEX: Int = 8
+        const val MASTER_EVENT_PROJECTION_EVENT_LOCATION_INDEX: Int = 9
+        const val MASTER_EVENT_PROJECTION_CUSTOM_APP_URI_INDEX: Int = 10
+        const val MASTER_EVENT_PROJECTION_START_TIMEZONE_INDEX: Int = 11
+        const val MASTER_EVENT_PROJECTION_END_TIMEZONE_INDEX: Int = 12
+        const val MASTER_EVENT_PROJECTION_AVAILABILITY_INDEX: Int = 13
+        const val MASTER_EVENT_PROJECTION_STATUS_INDEX: Int = 14
+        const val MASTER_EVENT_PROJECTION_EVENT_COLOR_INDEX: Int = 15
+        const val MASTER_EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX: Int = 16
+
+        val MASTER_EVENT_PROJECTION: Array<String> = arrayOf(
+            CalendarContract.Events._ID,
+            CalendarContract.Events.CALENDAR_ID,
+            CalendarContract.Events.TITLE,
+            CalendarContract.Events.DESCRIPTION,
+            CalendarContract.Events.DTSTART,
+            CalendarContract.Events.DTEND,
+            CalendarContract.Events.DURATION,
+            CalendarContract.Events.RRULE,
+            CalendarContract.Events.ALL_DAY,
+            CalendarContract.Events.EVENT_LOCATION,
+            CalendarContract.Events.CUSTOM_APP_URI,
+            CalendarContract.Events.EVENT_TIMEZONE,
+            CalendarContract.Events.EVENT_END_TIMEZONE,
+            CalendarContract.Events.AVAILABILITY,
+            CalendarContract.Events.STATUS,
+            CalendarContract.Events.EVENT_COLOR,
+            CalendarContract.Events.EVENT_COLOR_KEY
         )
 
         const val EVENT_INSTANCE_DELETION_ID_INDEX: Int = 0

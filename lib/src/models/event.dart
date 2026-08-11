@@ -14,6 +14,16 @@ class Event {
   /// Read-only. The identifier of the calendar that this event is associated with
   String? calendarId;
 
+  /// Read-only. Whether this event is a modified occurrence of a recurring event.
+  late bool isDetached;
+
+  /// Read-only. The original start of a detached recurring-event occurrence.
+  TZDateTime? originalStart;
+
+  /// Read-only. Android exclusive. The identifier of the recurring event for
+  /// which this event is an exception.
+  String? originalEventId;
+
   /// The title of this event
   String? title;
 
@@ -66,20 +76,25 @@ class Event {
   ///`android/src/main/kotlin/com/builttoroam/devicecalendar/models/Event.kt`
   ///`android/src/main/kotlin/com/builttoroam/devicecalendar/CalendarDelegate.kt`
   ///`android/src/main/kotlin/com/builttoroam/devicecalendar/DeviceCalendarPlugin.kt`
-  Event(this.calendarId,
-      {this.eventId,
-      this.title,
-      this.start,
-      this.end,
-      this.description,
-      this.attendees,
-      this.recurrenceRule,
-      this.reminders,
-      this.availability = Availability.Busy,
-      this.location,
-      this.url,
-      this.allDay = false,
-      this.status});
+  Event(
+    this.calendarId, {
+    this.eventId,
+    this.title,
+    this.start,
+    this.end,
+    this.description,
+    this.attendees,
+    this.recurrenceRule,
+    this.reminders,
+    this.availability = Availability.Busy,
+    this.location,
+    this.url,
+    this.allDay = false,
+    this.status,
+    this.isDetached = false,
+    this.originalStart,
+    this.originalEventId,
+  });
 
   ///Get Event from JSON.
   ///
@@ -115,6 +130,8 @@ class Event {
 
     eventId = json['eventId'];
     calendarId = json['calendarId'];
+    isDetached = json['eventIsDetached'] ?? false;
+    originalEventId = json['originalEventId'];
     title = json['eventTitle'];
     description = json['eventDescription'];
     color = json['eventColor'];
@@ -127,6 +144,13 @@ class Event {
     start = startTimestamp != null
         ? TZDateTime.fromMillisecondsSinceEpoch(startTimeZone, startTimestamp)
         : TZDateTime.now(local);
+    final int? originalStartTimestamp = json['eventOriginalStartDate'];
+    originalStart = originalStartTimestamp == null
+        ? null
+        : TZDateTime.fromMillisecondsSinceEpoch(
+            startTimeZone,
+            originalStartTimestamp,
+          );
 
     endTimestamp = json['eventEndDate'];
     endLocationName = json['eventEndTimeZone'];
@@ -141,9 +165,14 @@ class Event {
       // timezone, which can result in the wrong day, so we need to bring the
       // date back to midnight UTC to get the correct date
       var startOffset = start?.timeZoneOffset.inMilliseconds ?? 0;
+      var originalStartOffset =
+          originalStart?.timeZoneOffset.inMilliseconds ?? 0;
       var endOffset = end?.timeZoneOffset.inMilliseconds ?? 0;
       // subtract the offset to get back to midnight on the correct date
       start = start?.subtract(Duration(milliseconds: startOffset));
+      originalStart = originalStart?.subtract(
+        Duration(milliseconds: originalStartOffset),
+      );
       end = end?.subtract(Duration(milliseconds: endOffset));
       // The Event End Date for allDay events is midnight of the next day, so
       // subtract one day
@@ -170,9 +199,11 @@ class Event {
       // Getting and setting an organiser for iOS
       var organiser = Attendee.fromJson(json['organizer']);
 
-      var attendee = attendees?.firstWhereOrNull((at) =>
-          at?.name == organiser.name &&
-          at?.emailAddress == organiser.emailAddress);
+      var attendee = attendees?.firstWhereOrNull(
+        (at) =>
+            at?.name == organiser.name &&
+            at?.emailAddress == organiser.emailAddress,
+      );
       if (attendee != null) {
         attendee.isOrganiser = true;
       }
@@ -224,7 +255,8 @@ class Event {
     }
     if (legacyJSON) {
       throw const FormatException(
-          'legacy JSON detected. Please update your current JSONs as they may not be supported later on.');
+        'legacy JSON detected. Please update your current JSONs as they may not be supported later on.',
+      );
     }
   }
 
@@ -233,6 +265,9 @@ class Event {
 
     data['calendarId'] = calendarId;
     data['eventId'] = eventId;
+    data['eventIsDetached'] = isDetached;
+    data['eventOriginalStartDate'] = originalStart?.millisecondsSinceEpoch;
+    data['originalEventId'] = originalEventId;
     data['eventTitle'] = title;
     data['eventDescription'] = description;
     data['eventStartDate'] = start?.millisecondsSinceEpoch ??

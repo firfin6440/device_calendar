@@ -45,7 +45,9 @@ import androidx.collection.SparseArrayCompat
 
 private const val RETRIEVE_CALENDARS_REQUEST_CODE = 0
 private const val RETRIEVE_EVENTS_REQUEST_CODE = RETRIEVE_CALENDARS_REQUEST_CODE + 1
-private const val RETRIEVE_CALENDAR_REQUEST_CODE = RETRIEVE_EVENTS_REQUEST_CODE + 1
+private const val RETRIEVE_MASTER_EVENT_REQUEST_CODE = RETRIEVE_EVENTS_REQUEST_CODE + 1
+private const val UPDATE_ATTENDEE_STATUS_REQUEST_CODE = RETRIEVE_MASTER_EVENT_REQUEST_CODE + 1
+private const val RETRIEVE_CALENDAR_REQUEST_CODE = UPDATE_ATTENDEE_STATUS_REQUEST_CODE + 1
 private const val CREATE_OR_UPDATE_EVENT_REQUEST_CODE = RETRIEVE_CALENDAR_REQUEST_CODE + 1
 private const val DELETE_EVENT_REQUEST_CODE = CREATE_OR_UPDATE_EVENT_REQUEST_CODE + 1
 private const val REQUEST_PERMISSIONS_REQUEST_CODE = DELETE_EVENT_REQUEST_CODE + 1
@@ -107,6 +109,23 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                         cachedValues.calendarEventsStartDate,
                         cachedValues.calendarEventsEndDate,
                         cachedValues.calendarEventsIds,
+                        cachedValues.pendingChannelResult
+                    )
+                }
+                RETRIEVE_MASTER_EVENT_REQUEST_CODE -> {
+                    retrieveMasterEvent(
+                        cachedValues.calendarId,
+                        cachedValues.eventId,
+                        cachedValues.pendingChannelResult
+                    )
+                }
+                UPDATE_ATTENDEE_STATUS_REQUEST_CODE -> {
+                    updateAttendeeStatus(
+                        cachedValues.calendarId,
+                        cachedValues.eventId,
+                        cachedValues.attendeeEmail,
+                        cachedValues.expectedAttendeeStatus!!,
+                        cachedValues.newAttendeeStatus!!,
                         cachedValues.pendingChannelResult
                     )
                 }
@@ -450,6 +469,204 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         return
     }
 
+    fun retrieveMasterEvent(
+        calendarId: String,
+        originalEventId: String,
+        pendingChannelResult: MethodChannel.Result
+    ) {
+        if (!arePermissionsGranted()) {
+            val parameters = CalendarMethodsParametersCacheModel(
+                pendingChannelResult,
+                RETRIEVE_MASTER_EVENT_REQUEST_CODE,
+                calendarId,
+                eventId = originalEventId
+            )
+            requestPermissions(parameters)
+            return
+        }
+
+        val originalEventIdNumber = originalEventId.toLongOrNull()
+        if (originalEventIdNumber == null) {
+            finishWithError(
+                EC.INVALID_ARGUMENT,
+                "The original event ID must be a number",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val contentResolver = _context?.contentResolver
+        val eventUri = ContentUris.withAppendedId(Events.CONTENT_URI, originalEventIdNumber)
+        val cursor = contentResolver?.query(
+            eventUri,
+            Cst.MASTER_EVENT_PROJECTION,
+            null,
+            null,
+            null
+        )
+
+        try {
+            if (cursor?.moveToFirst() != true) {
+                finishWithError(
+                    EC.NOT_FOUND,
+                    "The master event with the ID $originalEventId could not be found",
+                    pendingChannelResult
+                )
+                return
+            }
+
+            val event = parseMasterEvent(cursor)
+            if (event == null || event.calendarId != calendarId) {
+                finishWithError(
+                    EC.NOT_FOUND,
+                    "The master event with the ID $originalEventId could not be found in calendar $calendarId",
+                    pendingChannelResult
+                )
+                return
+            }
+
+            val calendar = retrieveCalendar(calendarId, pendingChannelResult, true)
+            if (calendar == null) {
+                finishWithError(
+                    EC.NOT_FOUND,
+                    "Couldn't retrieve the Calendar with ID $calendarId",
+                    pendingChannelResult
+                )
+                return
+            }
+
+            event.attendees = retrieveAttendees(calendar, originalEventId, contentResolver)
+            event.organizer = event.attendees.firstOrNull {
+                it.isOrganizer != null && it.isOrganizer
+            }
+            event.reminders = retrieveReminders(originalEventId, contentResolver)
+            finishWithSuccess(_gson?.toJson(event), pendingChannelResult)
+        } catch (e: Exception) {
+            finishWithError(EC.GENERIC_ERROR, e.message, pendingChannelResult)
+        } finally {
+            cursor?.close()
+        }
+    }
+
+    fun updateAttendeeStatus(
+        calendarId: String,
+        eventId: String,
+        attendeeEmail: String,
+        expectedStatus: Int,
+        newStatus: Int,
+        pendingChannelResult: MethodChannel.Result
+    ) {
+        if (!arePermissionsGranted()) {
+            val parameters = CalendarMethodsParametersCacheModel(
+                pendingChannelResult,
+                UPDATE_ATTENDEE_STATUS_REQUEST_CODE,
+                calendarId,
+                eventId = eventId,
+                attendeeEmail = attendeeEmail,
+                expectedAttendeeStatus = expectedStatus,
+                newAttendeeStatus = newStatus
+            )
+            requestPermissions(parameters)
+            return
+        }
+
+        val eventIdNumber = eventId.toLongOrNull()
+        val calendarIdNumber = calendarId.toLongOrNull()
+        val validStatuses = setOf(
+            CalendarContract.Attendees.ATTENDEE_STATUS_NONE,
+            CalendarContract.Attendees.ATTENDEE_STATUS_ACCEPTED,
+            CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED,
+            CalendarContract.Attendees.ATTENDEE_STATUS_INVITED,
+            CalendarContract.Attendees.ATTENDEE_STATUS_TENTATIVE
+        )
+        if (eventIdNumber == null || calendarIdNumber == null ||
+            expectedStatus !in validStatuses || newStatus !in validStatuses
+        ) {
+            finishWithError(
+                EC.INVALID_ARGUMENT,
+                "Invalid calendar, event, or attendee status",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val contentResolver = _context?.contentResolver
+        val eventCursor = contentResolver?.query(
+            ContentUris.withAppendedId(Events.CONTENT_URI, eventIdNumber),
+            arrayOf(Events.CALENDAR_ID, Events.DELETED),
+            null,
+            null,
+            null
+        )
+        val eventExists = eventCursor.use { cursor ->
+            cursor?.moveToFirst() == true &&
+                cursor.getLong(0) == calendarIdNumber &&
+                cursor.getInt(1) != 1
+        }
+        if (!eventExists) {
+            finishWithError(
+                EC.NOT_FOUND,
+                "The event with the ID $eventId could not be found in calendar $calendarId",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val selection =
+            "(${CalendarContract.Attendees.EVENT_ID} = ?) AND " +
+                "(${CalendarContract.Attendees.ATTENDEE_EMAIL} = ?) AND " +
+                "(${CalendarContract.Attendees.ATTENDEE_STATUS} = ?)"
+        val selectionArgs = arrayOf(
+            eventId,
+            attendeeEmail,
+            expectedStatus.toString()
+        )
+        val values = ContentValues().apply {
+            put(CalendarContract.Attendees.ATTENDEE_STATUS, newStatus)
+        }
+        val updatedRows = contentResolver?.update(
+            CalendarContract.Attendees.CONTENT_URI,
+            values,
+            selection,
+            selectionArgs
+        ) ?: 0
+        if (updatedRows > 0) {
+            finishWithSuccess(
+                mapOf("outcome" to "updated", "currentStatus" to newStatus),
+                pendingChannelResult
+            )
+            return
+        }
+
+        val currentStatusCursor = contentResolver?.query(
+            CalendarContract.Attendees.CONTENT_URI,
+            arrayOf(CalendarContract.Attendees.ATTENDEE_STATUS),
+            "(${CalendarContract.Attendees.EVENT_ID} = ?) AND " +
+                "(${CalendarContract.Attendees.ATTENDEE_EMAIL} = ?)",
+            arrayOf(eventId, attendeeEmail),
+            null
+        )
+        val currentStatus = currentStatusCursor.use { cursor ->
+            if (cursor?.moveToFirst() == true) cursor.getInt(0) else null
+        }
+        if (currentStatus == null) {
+            finishWithError(
+                EC.NOT_FOUND,
+                "The attendee $attendeeEmail could not be found for event $eventId",
+                pendingChannelResult
+            )
+            return
+        }
+
+        finishWithSuccess(
+            mapOf(
+                "outcome" to if (currentStatus == newStatus) "alreadyCurrent" else "conflict",
+                "currentStatus" to currentStatus
+            ),
+            pendingChannelResult
+        )
+    }
+
     fun createOrUpdateEvent(
         calendarId: String,
         event: Event?,
@@ -526,7 +743,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                         newSelfAttendee.attendanceStatus != null &&
                         existingSelfAttendee.attendanceStatus != newSelfAttendee.attendanceStatus
                     ) {
-                        updateAttendeeStatus(eventId, newSelfAttendee, contentResolver)
+                        updateAttendeeStatusRow(eventId, newSelfAttendee, contentResolver)
                     }
                 }
             }
@@ -702,7 +919,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
     }
 
-    private fun updateAttendeeStatus(
+    private fun updateAttendeeStatusRow(
         eventId: Long,
         attendee: Attendee,
         contentResolver: ContentResolver?
@@ -945,10 +1162,24 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val eventStatus = parseEventStatus(cursor.getInt(Cst.EVENT_PROJECTION_STATUS_INDEX))
         val eventColor = cursor.getInt(Cst.EVENT_PROJECTION_EVENT_COLOR_INDEX)
         val eventColorKey = cursor.getInt(Cst.EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX)
+        val originalEventId = if (cursor.isNull(Cst.EVENT_PROJECTION_ORIGINAL_ID_INDEX)) {
+            null
+        } else {
+            cursor.getString(Cst.EVENT_PROJECTION_ORIGINAL_ID_INDEX)
+        }
+        val originalStartDate =
+            if (cursor.isNull(Cst.EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX)) {
+                null
+            } else {
+                cursor.getLong(Cst.EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX)
+            }
         val event = Event()
         event.eventTitle = title ?: "New Event"
         event.eventId = eventId.toString()
         event.calendarId = calendarId
+        event.eventIsDetached = originalEventId != null || originalStartDate != null
+        event.eventOriginalStartDate = originalStartDate
+        event.originalEventId = originalEventId
         event.eventDescription = description
         event.eventStartDate = begin
         event.eventEndDate = end
@@ -964,6 +1195,77 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         event.eventColorKey = if (eventColorKey == 0) null else eventColorKey
 
         return event
+    }
+
+    private fun parseMasterEvent(cursor: Cursor?): Event? {
+        if (cursor == null) return null
+
+        val eventId = cursor.getLong(Cst.MASTER_EVENT_PROJECTION_ID_INDEX)
+        val masterCalendarId =
+            cursor.getLong(Cst.MASTER_EVENT_PROJECTION_CALENDAR_ID_INDEX).toString()
+        val start = cursor.getLong(Cst.MASTER_EVENT_PROJECTION_START_INDEX)
+        val end = if (cursor.isNull(Cst.MASTER_EVENT_PROJECTION_END_INDEX)) {
+            start + (parseDurationMillis(
+                cursor.getString(Cst.MASTER_EVENT_PROJECTION_DURATION_INDEX)
+            ) ?: 0L)
+        } else {
+            cursor.getLong(Cst.MASTER_EVENT_PROJECTION_END_INDEX)
+        }
+
+        val event = Event()
+        event.eventId = eventId.toString()
+        event.calendarId = masterCalendarId
+        event.eventTitle =
+            cursor.getString(Cst.MASTER_EVENT_PROJECTION_TITLE_INDEX) ?: "New Event"
+        event.eventDescription =
+            cursor.getString(Cst.MASTER_EVENT_PROJECTION_DESCRIPTION_INDEX)
+        event.eventStartDate = start
+        event.eventEndDate = end
+        event.eventAllDay =
+            cursor.getInt(Cst.MASTER_EVENT_PROJECTION_ALL_DAY_INDEX) > 0
+        event.eventLocation =
+            cursor.getString(Cst.MASTER_EVENT_PROJECTION_EVENT_LOCATION_INDEX)
+        event.eventURL =
+            cursor.getString(Cst.MASTER_EVENT_PROJECTION_CUSTOM_APP_URI_INDEX)
+        event.eventStartTimeZone =
+            cursor.getString(Cst.MASTER_EVENT_PROJECTION_START_TIMEZONE_INDEX)
+        event.eventEndTimeZone =
+            cursor.getString(Cst.MASTER_EVENT_PROJECTION_END_TIMEZONE_INDEX)
+        event.recurrenceRule = parseRecurrenceRuleString(
+            cursor.getString(Cst.MASTER_EVENT_PROJECTION_RECURRING_RULE_INDEX)
+        )
+        event.availability = parseAvailability(
+            cursor.getInt(Cst.MASTER_EVENT_PROJECTION_AVAILABILITY_INDEX)
+        )
+        event.eventStatus = parseEventStatus(
+            cursor.getInt(Cst.MASTER_EVENT_PROJECTION_STATUS_INDEX)
+        )
+        val eventColor = cursor.getInt(Cst.MASTER_EVENT_PROJECTION_EVENT_COLOR_INDEX)
+        val eventColorKey = cursor.getInt(Cst.MASTER_EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX)
+        event.eventColor = if (eventColor == 0) null else eventColor
+        event.eventColorKey = if (eventColorKey == 0) null else eventColorKey
+
+        return event
+    }
+
+    private fun parseDurationMillis(duration: String?): Long? {
+        if (duration == null) return null
+        val match = Regex(
+            "^([+-])?P(?:(\\d+)W)?(?:(\\d+)D)?(?:T(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?)?$"
+        ).matchEntire(duration) ?: return null
+        val sign = if (match.groupValues[1] == "-") -1 else 1
+        val weeks = match.groupValues[2].toLongOrNull() ?: 0L
+        val days = match.groupValues[3].toLongOrNull() ?: 0L
+        val hours = match.groupValues[4].toLongOrNull() ?: 0L
+        val minutes = match.groupValues[5].toLongOrNull() ?: 0L
+        val seconds = match.groupValues[6].toLongOrNull() ?: 0L
+        return sign * (
+            weeks * 7 * DateUtils.DAY_IN_MILLIS +
+                days * DateUtils.DAY_IN_MILLIS +
+                hours * DateUtils.HOUR_IN_MILLIS +
+                minutes * DateUtils.MINUTE_IN_MILLIS +
+                seconds * DateUtils.SECOND_IN_MILLIS
+            )
     }
 
     private fun parseRecurrenceRuleString(recurrenceRuleString: String?): RecurrenceRule? {
