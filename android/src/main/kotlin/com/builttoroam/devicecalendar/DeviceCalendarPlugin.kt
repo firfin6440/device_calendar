@@ -2,6 +2,10 @@ package com.builttoroam.devicecalendar
 
 import android.app.Activity
 import android.content.Context
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.CalendarContract
 import androidx.annotation.NonNull
 import com.builttoroam.devicecalendar.common.Constants
 import com.builttoroam.devicecalendar.models.*
@@ -11,6 +15,7 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
+import io.flutter.plugin.common.EventChannel
 import org.dmfs.rfc5545.recur.Freq
 
 // Methods
@@ -20,6 +25,7 @@ private const val RETRIEVE_CALENDARS_METHOD = "retrieveCalendars"
 private const val RETRIEVE_EVENTS_METHOD = "retrieveEvents"
 private const val RETRIEVE_MASTER_EVENT_METHOD = "retrieveMasterEvent"
 private const val UPDATE_ATTENDEE_STATUS_METHOD = "updateAttendeeStatus"
+private const val APPLY_EVENT_CHANGES_METHOD = "applyEventChanges"
 private const val DELETE_EVENT_METHOD = "deleteEvent"
 private const val DELETE_EVENT_INSTANCE_METHOD = "deleteEventInstance"
 private const val CREATE_OR_UPDATE_EVENT_METHOD = "createOrUpdateEvent"
@@ -41,6 +47,7 @@ private const val ORIGINAL_EVENT_ID_ARGUMENT = "originalEventId"
 private const val ATTENDEE_EMAIL_ARGUMENT = "attendeeEmail"
 private const val EXPECTED_ATTENDEE_STATUS_ARGUMENT = "expectedAttendeeStatus"
 private const val NEW_ATTENDEE_STATUS_ARGUMENT = "newAttendeeStatus"
+private const val EVENT_CHANGES_ARGUMENT = "eventChanges"
 private const val EVENT_TITLE_ARGUMENT = "eventTitle"
 private const val EVENT_LOCATION_ARGUMENT = "eventLocation"
 private const val EVENT_URL_ARGUMENT = "eventURL"
@@ -77,17 +84,20 @@ private const val EVENT_STATUS_ARGUMENT = "eventStatus"
 private const val EVENT_COLOR_KEY_ARGUMENT = "eventColorKey"
 private const val CALENDAR_COLOR_KEY_ARGUMENT = "calendarColorKey"
 
-class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
+class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, EventChannel.StreamHandler {
 
     /// The MethodChannel that will the communication between Flutter and native Android
     ///
     /// This local reference serves to register the plugin with the Flutter Engine and unregister it
     /// when the Flutter Engine is detached from the Activity
     private lateinit var channel: MethodChannel
+    private lateinit var calendarChangesChannel: EventChannel
     private var context: Context? = null
     private var activity: Activity? = null
 
     private lateinit var _calendarDelegate: CalendarDelegate
+    private var calendarChangesSink: EventChannel.EventSink? = null
+    private var calendarContentObserver: ContentObserver? = null
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
@@ -96,11 +106,58 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             "plugins.builttoroam.com/device_calendar"
         )
         channel.setMethodCallHandler(this)
+        calendarChangesChannel = EventChannel(
+            flutterPluginBinding.binaryMessenger,
+            "plugins.builttoroam.com/device_calendar/calendar_changes"
+        )
+        calendarChangesChannel.setStreamHandler(this)
         _calendarDelegate = CalendarDelegate(null, context!!)
     }
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
+        stopObservingCalendarChanges()
+        calendarChangesChannel.setStreamHandler(null)
         channel.setMethodCallHandler(null)
+        context = null
+    }
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        calendarChangesSink = events
+        if (calendarContentObserver != null) return
+        val applicationContext = context ?: return
+        calendarContentObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                super.onChange(selfChange)
+                calendarChangesSink?.success(System.currentTimeMillis())
+            }
+        }
+        try {
+            applicationContext.contentResolver.registerContentObserver(
+                CalendarContract.CONTENT_URI,
+                true,
+                calendarContentObserver!!
+            )
+        } catch (error: SecurityException) {
+            calendarContentObserver = null
+            events?.error(
+                "calendar_permissions_missing",
+                "Calendar permission is required to observe calendar changes.",
+                null
+            )
+        }
+    }
+
+    override fun onCancel(arguments: Any?) {
+        stopObservingCalendarChanges()
+    }
+
+    private fun stopObservingCalendarChanges() {
+        val observer = calendarContentObserver
+        if (observer != null) {
+            context?.contentResolver?.unregisterContentObserver(observer)
+        }
+        calendarContentObserver = null
+        calendarChangesSink = null
     }
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
@@ -158,6 +215,17 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     attendeeEmail!!,
                     expectedStatus!!,
                     newStatus!!,
+                    result
+                )
+            }
+            APPLY_EVENT_CHANGES_METHOD -> {
+                val calendarId = call.argument<String>(CALENDAR_ID_ARGUMENT)
+                val eventId = call.argument<String>(EVENT_ID_ARGUMENT)
+                val eventChanges = call.argument<Map<String, Any?>>(EVENT_CHANGES_ARGUMENT)
+                _calendarDelegate.applyEventChanges(
+                    calendarId!!,
+                    eventId!!,
+                    eventChanges!!,
                     result
                 )
             }

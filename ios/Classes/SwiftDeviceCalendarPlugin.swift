@@ -23,7 +23,7 @@ extension String {
     }
 }
 
-public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDelegate, UINavigationControllerDelegate {
+public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHandler, EKEventViewDelegate, UINavigationControllerDelegate {
     struct DeviceCalendar: Codable {
         let id: String
         let name: String
@@ -97,6 +97,7 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
     }
 
     static let channelName = "plugins.builttoroam.com/device_calendar"
+    static let calendarChangesChannelName = "plugins.builttoroam.com/device_calendar/calendar_changes"
     let notFoundErrorCode = "404"
     let notAllowed = "405"
     let genericError = "500"
@@ -106,12 +107,14 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
     let calendarReadOnlyErrorMessageFormat = "Calendar with ID %@ is read-only"
     let eventNotFoundErrorMessageFormat = "The event with the ID %@ could not be found"
     let eventStore = EKEventStore()
+    var calendarChangesSink: FlutterEventSink?
     let requestPermissionsMethod = "requestPermissions"
     let hasPermissionsMethod = "hasPermissions"
     let retrieveCalendarsMethod = "retrieveCalendars"
     let retrieveEventsMethod = "retrieveEvents"
     let retrieveMasterEventMethod = "retrieveMasterEvent"
     let updateAttendeeStatusMethod = "updateAttendeeStatus"
+    let applyEventChangesMethod = "applyEventChanges"
     let retrieveSourcesMethod = "retrieveSources"
     let createOrUpdateEventMethod = "createOrUpdateEvent"
     let createCalendarMethod = "createCalendar"
@@ -166,6 +169,39 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
         let channel = FlutterMethodChannel(name: channelName, binaryMessenger: registrar.messenger())
         let instance = SwiftDeviceCalendarPlugin()
         registrar.addMethodCallDelegate(instance, channel: channel)
+        let calendarChangesChannel = FlutterEventChannel(
+            name: calendarChangesChannelName,
+            binaryMessenger: registrar.messenger())
+        calendarChangesChannel.setStreamHandler(instance)
+    }
+
+    public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        calendarChangesSink = events
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(eventStoreChanged(_:)),
+            name: .EKEventStoreChanged,
+            object: eventStore)
+        return nil
+    }
+
+    public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: .EKEventStoreChanged,
+            object: eventStore)
+        calendarChangesSink = nil
+        return nil
+    }
+
+    @objc private func eventStoreChanged(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            self?.calendarChangesSink?(Date().millisecondsSinceEpoch)
+        }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -184,6 +220,11 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, EKEventViewDele
             result(FlutterError(
                 code: self.notAllowed,
                 message: "EventKit does not support updating attendee RSVP status",
+                details: nil))
+        case applyEventChangesMethod:
+            result(FlutterError(
+                code: self.notAllowed,
+                message: "EventKit does not support per-event color changes",
                 details: nil))
         case createOrUpdateEventMethod:
             createOrUpdateEvent(call, result)

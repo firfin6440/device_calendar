@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
@@ -15,6 +16,17 @@ import 'common/error_messages.dart';
 class DeviceCalendarPlugin {
   static const MethodChannel channel =
       MethodChannel(ChannelConstants.channelName);
+  static const EventChannel _calendarChangesChannel =
+      EventChannel(ChannelConstants.calendarChangesChannelName);
+
+  static Stream<void>? _calendarChanges;
+
+  /// Emits whenever the platform calendar store reports a change.
+  ///
+  /// Notifications are intentionally coarse: consumers should debounce them
+  /// and reload only the ranges they currently need.
+  Stream<void> get calendarChanges => _calendarChanges ??=
+      _calendarChangesChannel.receiveBroadcastStream().map<void>((_) {});
 
   static final DeviceCalendarPlugin _instance = DeviceCalendarPlugin.private();
 
@@ -213,6 +225,76 @@ class DeviceCalendarPlugin {
         return AttendeeStatusUpdateResult(
           outcome: outcome,
           currentStatus: AndroidAttendanceStatus.values[currentStatusIndex],
+        );
+      },
+    );
+  }
+
+  /// Atomically applies an optimistic set of changes to an existing event.
+  ///
+  /// Android only. No field is updated unless every expected value in
+  /// [changes] still matches the value stored by the Calendar Provider.
+  Future<Result<EventChangeResult>> applyEventChanges({
+    required String? calendarId,
+    required String? eventId,
+    required EventChangeSet changes,
+  }) async {
+    return _invokeChannelMethod(
+      ChannelConstants.methodNameApplyEventChanges,
+      assertParameters: (result) {
+        _validateCalendarIdParameter(result, calendarId);
+        _assertParameter(
+          result,
+          (eventId?.isNotEmpty ?? false) && !changes.isEmpty,
+          ErrorCodes.invalidArguments,
+          'Event ID and at least one event change are required.',
+        );
+      },
+      arguments: () => <String, Object?>{
+        ChannelConstants.parameterNameCalendarId: calendarId,
+        ChannelConstants.parameterNameEventId: eventId,
+        ChannelConstants.parameterNameEventChanges: changes.toJson(),
+      },
+      evaluateResponse: (rawData) {
+        final Map<Object?, Object?> response =
+            Map<Object?, Object?>.from(rawData as Map);
+        final EventChangeOutcome outcome;
+        switch (response['outcome']) {
+          case 'updated':
+            outcome = EventChangeOutcome.updated;
+            break;
+          case 'alreadyCurrent':
+            outcome = EventChangeOutcome.alreadyCurrent;
+            break;
+          case 'conflict':
+            outcome = EventChangeOutcome.conflict;
+            break;
+          default:
+            throw FormatException('Unknown event change result: $rawData');
+        }
+
+        final Set<EventChangeField> conflictingFields =
+            ((response['conflictingFields'] as List?) ?? const <Object?>[])
+                .map((Object? field) {
+          switch (field) {
+            case 'color':
+              return EventChangeField.color;
+            default:
+              throw FormatException('Unknown conflicting field: $field');
+          }
+        }).toSet();
+        final Map<Object?, Object?> currentValues =
+            Map<Object?, Object?>.from(response['currentValues'] as Map);
+        final Object? rawCurrentColor = currentValues['color'];
+
+        return EventChangeResult(
+          outcome: outcome,
+          conflictingFields: conflictingFields,
+          currentColor: rawCurrentColor is Map
+              ? EventColorValue.fromJson(
+                  Map<Object?, Object?>.from(rawCurrentColor),
+                )
+              : null,
         );
       },
     );

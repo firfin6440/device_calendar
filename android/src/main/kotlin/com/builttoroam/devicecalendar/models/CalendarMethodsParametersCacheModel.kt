@@ -13,7 +13,8 @@ class CalendarMethodsParametersCacheModel(
     var event: Event? = null,
     var attendeeEmail: String = "",
     var expectedAttendeeStatus: Int? = null,
-    var newAttendeeStatus: Int? = null
+    var newAttendeeStatus: Int? = null,
+    var eventChanges: Map<String, Any?> = emptyMap()
 ) {
     var ownCacheKey: Int? = null
 }

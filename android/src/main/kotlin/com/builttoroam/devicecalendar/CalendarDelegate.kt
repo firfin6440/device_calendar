@@ -47,7 +47,8 @@ private const val RETRIEVE_CALENDARS_REQUEST_CODE = 0
 private const val RETRIEVE_EVENTS_REQUEST_CODE = RETRIEVE_CALENDARS_REQUEST_CODE + 1
 private const val RETRIEVE_MASTER_EVENT_REQUEST_CODE = RETRIEVE_EVENTS_REQUEST_CODE + 1
 private const val UPDATE_ATTENDEE_STATUS_REQUEST_CODE = RETRIEVE_MASTER_EVENT_REQUEST_CODE + 1
-private const val RETRIEVE_CALENDAR_REQUEST_CODE = UPDATE_ATTENDEE_STATUS_REQUEST_CODE + 1
+private const val APPLY_EVENT_CHANGES_REQUEST_CODE = UPDATE_ATTENDEE_STATUS_REQUEST_CODE + 1
+private const val RETRIEVE_CALENDAR_REQUEST_CODE = APPLY_EVENT_CHANGES_REQUEST_CODE + 1
 private const val CREATE_OR_UPDATE_EVENT_REQUEST_CODE = RETRIEVE_CALENDAR_REQUEST_CODE + 1
 private const val DELETE_EVENT_REQUEST_CODE = CREATE_OR_UPDATE_EVENT_REQUEST_CODE + 1
 private const val REQUEST_PERMISSIONS_REQUEST_CODE = DELETE_EVENT_REQUEST_CODE + 1
@@ -126,6 +127,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                         cachedValues.attendeeEmail,
                         cachedValues.expectedAttendeeStatus!!,
                         cachedValues.newAttendeeStatus!!,
+                        cachedValues.pendingChannelResult
+                    )
+                }
+                APPLY_EVENT_CHANGES_REQUEST_CODE -> {
+                    applyEventChanges(
+                        cachedValues.calendarId,
+                        cachedValues.eventId,
+                        cachedValues.eventChanges,
                         cachedValues.pendingChannelResult
                     )
                 }
@@ -664,6 +673,157 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 "currentStatus" to currentStatus
             ),
             pendingChannelResult
+        )
+    }
+
+    fun applyEventChanges(
+        calendarId: String,
+        eventId: String,
+        eventChanges: Map<String, Any?>,
+        pendingChannelResult: MethodChannel.Result
+    ) {
+        if (!arePermissionsGranted()) {
+            val parameters = CalendarMethodsParametersCacheModel(
+                pendingChannelResult,
+                APPLY_EVENT_CHANGES_REQUEST_CODE,
+                calendarId,
+                eventId = eventId,
+                eventChanges = eventChanges
+            )
+            requestPermissions(parameters)
+            return
+        }
+
+        val eventIdNumber = eventId.toLongOrNull()
+        val calendarIdNumber = calendarId.toLongOrNull()
+        val colorChange = eventChanges["color"] as? Map<*, *>
+        val expectedColor = colorChange?.get("expected") as? Map<*, *>
+        val requestedColor = colorChange?.get("requested") as? Map<*, *>
+        if (eventIdNumber == null || calendarIdNumber == null ||
+            colorChange == null || expectedColor == null || requestedColor == null ||
+            !expectedColor.containsKey("color") || !expectedColor.containsKey("colorKey") ||
+            !requestedColor.containsKey("color") || !requestedColor.containsKey("colorKey")
+        ) {
+            finishWithError(
+                EC.INVALID_ARGUMENT,
+                "Invalid calendar, event, or event changes",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val expectedColorValue = (expectedColor["color"] as? Number)?.toInt()
+        val expectedColorKey = (expectedColor["colorKey"] as? Number)?.toInt()
+        val requestedColorValue = (requestedColor["color"] as? Number)?.toInt()
+        val requestedColorKey = (requestedColor["colorKey"] as? Number)?.toInt()
+
+        val selectionParts = mutableListOf(
+            "${Events._ID} = ?",
+            "${Events.CALENDAR_ID} = ?",
+            "${Events.DELETED} != 1"
+        )
+        val selectionArgs = mutableListOf(eventId, calendarId)
+        if (expectedColorValue == null) {
+            selectionParts.add("(${Events.EVENT_COLOR} IS NULL OR ${Events.EVENT_COLOR} = 0)")
+        } else {
+            selectionParts.add("${Events.EVENT_COLOR} = ?")
+            selectionArgs.add(expectedColorValue.toString())
+        }
+        if (expectedColorKey == null) {
+            selectionParts.add("(${Events.EVENT_COLOR_KEY} IS NULL OR ${Events.EVENT_COLOR_KEY} = 0)")
+        } else {
+            selectionParts.add("${Events.EVENT_COLOR_KEY} = ?")
+            selectionArgs.add(expectedColorKey.toString())
+        }
+
+        val values = ContentValues().apply {
+            if (requestedColorValue == null) {
+                putNull(Events.EVENT_COLOR)
+            } else {
+                put(Events.EVENT_COLOR, requestedColorValue)
+            }
+            if (requestedColorKey == null) {
+                putNull(Events.EVENT_COLOR_KEY)
+            } else {
+                put(Events.EVENT_COLOR_KEY, requestedColorKey)
+            }
+        }
+        val contentResolver = _context?.contentResolver
+        val updatedRows = contentResolver?.update(
+            Events.CONTENT_URI,
+            values,
+            selectionParts.joinToString(" AND "),
+            selectionArgs.toTypedArray()
+        ) ?: 0
+        if (updatedRows > 0) {
+            finishWithSuccess(
+                eventChangeResult(
+                    "updated",
+                    emptyList(),
+                    requestedColorValue,
+                    requestedColorKey
+                ),
+                pendingChannelResult
+            )
+            return
+        }
+
+        val cursor = contentResolver?.query(
+            Events.CONTENT_URI,
+            arrayOf(Events.DELETED, Events.EVENT_COLOR, Events.EVENT_COLOR_KEY),
+            "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ?",
+            arrayOf(eventId, calendarId),
+            null
+        )
+        var deleted = false
+        var currentColorValue: Int? = null
+        var currentColorKey: Int? = null
+        val eventExists = cursor.use {
+            if (it?.moveToFirst() != true) {
+                false
+            } else {
+                deleted = it.getInt(0) == 1
+                currentColorValue =
+                    if (it.isNull(1) || it.getInt(1) == 0) null else it.getInt(1)
+                currentColorKey =
+                    if (it.isNull(2) || it.getInt(2) == 0) null else it.getInt(2)
+                !deleted
+            }
+        }
+        if (!eventExists) {
+            finishWithError(
+                EC.NOT_FOUND,
+                "The event with the ID $eventId could not be found in calendar $calendarId",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val alreadyCurrent = currentColorValue == requestedColorValue &&
+            currentColorKey == requestedColorKey
+        finishWithSuccess(
+            eventChangeResult(
+                if (alreadyCurrent) "alreadyCurrent" else "conflict",
+                if (alreadyCurrent) emptyList() else listOf("color"),
+                currentColorValue,
+                currentColorKey
+            ),
+            pendingChannelResult
+        )
+    }
+
+    private fun eventChangeResult(
+        outcome: String,
+        conflictingFields: List<String>,
+        color: Int?,
+        colorKey: Int?
+    ): Map<String, Any?> {
+        return mapOf(
+            "outcome" to outcome,
+            "conflictingFields" to conflictingFields,
+            "currentValues" to mapOf(
+                "color" to mapOf("color" to color, "colorKey" to colorKey)
+            )
         )
     }
 

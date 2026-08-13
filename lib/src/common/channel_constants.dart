@@ -1,5 +1,7 @@
 class ChannelConstants {
   static const String channelName = 'plugins.builttoroam.com/device_calendar';
+  static const String calendarChangesChannelName =
+      'plugins.builttoroam.com/device_calendar/calendar_changes';
 
   static const String methodNameRequestPermissions = 'requestPermissions';
   static const String methodNameHasPermissions = 'hasPermissions';
@@ -7,6 +9,7 @@ class ChannelConstants {
   static const String methodNameRetrieveEvents = 'retrieveEvents';
   static const String methodNameRetrieveMasterEvent = 'retrieveMasterEvent';
   static const String methodNameUpdateAttendeeStatus = 'updateAttendeeStatus';
+  static const String methodNameApplyEventChanges = 'applyEventChanges';
   static const String methodNameDeleteEvent = 'deleteEvent';
   static const String methodNameDeleteEventInstance = 'deleteEventInstance';
   static const String methodNameCreateOrUpdateEvent = 'createOrUpdateEvent';
@@ -14,7 +17,8 @@ class ChannelConstants {
   static const String methodNameDeleteCalendar = 'deleteCalendar';
   static const String methodNameShowiOSEventModal = 'showiOSEventModal';
   static const String methodNameRetrieveEventColors = 'retrieveEventColors';
-  static const String methodNameRetrieveCalendarColors = 'retrieveCalendarColors';
+  static const String methodNameRetrieveCalendarColors =
+      'retrieveCalendarColors';
   static const String methodNameUpdateCalendarColor = 'updateCalendarColor';
 
   static const String parameterNameCalendarId = 'calendarId';
@@ -26,6 +30,7 @@ class ChannelConstants {
   static const String parameterNameExpectedAttendeeStatus =
       'expectedAttendeeStatus';
   static const String parameterNameNewAttendeeStatus = 'newAttendeeStatus';
+  static const String parameterNameEventChanges = 'eventChanges';
   static const String parameterNameEventIds = 'eventIds';
   static const String parameterNameEventStartDate = 'eventStartDate';
   static const String parameterNameEventEndDate = 'eventEndDate';

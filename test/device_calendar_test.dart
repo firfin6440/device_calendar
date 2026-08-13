@@ -49,6 +49,24 @@ void main() {
     expect(result.data, true);
   });
 
+  test('CalendarChanges_Emits_Platform_Notifications', () async {
+    const EventChannel changesChannel = EventChannel(
+      'plugins.builttoroam.com/device_calendar/calendar_changes',
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockStreamHandler(
+      changesChannel,
+      MockStreamHandler.inline(
+        onListen: (_, MockStreamHandlerEventSink events) {
+          events.success(123);
+          events.endOfStream();
+        },
+      ),
+    );
+
+    await deviceCalendarPlugin.calendarChanges.first;
+  });
+
   test('RetrieveCalendars_Returns_Successfully', () async {
     const fakeCalendarName = 'fakeCalendarName';
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -192,6 +210,102 @@ void main() {
       attendeeEmail: 'user@example.com',
       expectedStatus: null,
       newStatus: AndroidAttendanceStatus.Accepted,
+    );
+
+    expect(result.isSuccess, false);
+    expect(result.errors.first.errorCode, ErrorCodes.invalidArguments);
+  });
+
+  test('ApplyEventChanges_UpdatesColorSuccessfully', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      log.add(methodCall);
+      return <String, Object>{
+        'outcome': 'updated',
+        'conflictingFields': <String>[],
+        'currentValues': <String, Object>{
+          'color': <String, Object>{'color': 0xff445566, 'colorKey': 7},
+        },
+      };
+    });
+
+    const EventChangeSet changes = EventChangeSet(
+      color: EventFieldChange<EventColorValue>(
+        expected: EventColorValue(color: 0xff112233, colorKey: 3),
+        requested: EventColorValue(color: 0xff445566, colorKey: 7),
+      ),
+    );
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: changes,
+    );
+
+    expect(result.isSuccess, true);
+    expect(result.data?.outcome, EventChangeOutcome.updated);
+    expect(result.data?.conflictingFields, isEmpty);
+    expect(result.data?.currentColor?.color, 0xff445566);
+    expect(result.data?.currentColor?.colorKey, 7);
+    expect(log, <Matcher>[
+      isMethodCall(
+        'applyEventChanges',
+        arguments: <String, dynamic>{
+          'calendarId': 'calendarId',
+          'eventId': 'eventId',
+          'eventChanges': <String, Object?>{
+            'color': <String, Object?>{
+              'expected': <String, Object?>{
+                'color': 0xff112233,
+                'colorKey': 3,
+              },
+              'requested': <String, Object?>{
+                'color': 0xff445566,
+                'colorKey': 7,
+              },
+            },
+          },
+        },
+      ),
+    ]);
+  });
+
+  test('ApplyEventChanges_ReturnsCurrentColorOnConflict', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      return <String, Object>{
+        'outcome': 'conflict',
+        'conflictingFields': <String>['color'],
+        'currentValues': <String, Object>{
+          'color': <String, Object>{'color': 0xff778899, 'colorKey': 9},
+        },
+      };
+    });
+
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        color: EventFieldChange<EventColorValue>(
+          expected: EventColorValue(color: 0xff112233, colorKey: 3),
+          requested: EventColorValue(color: 0xff445566, colorKey: 7),
+        ),
+      ),
+    );
+
+    expect(result.data?.outcome, EventChangeOutcome.conflict);
+    expect(
+      result.data?.conflictingFields,
+      <EventChangeField>{EventChangeField.color},
+    );
+    expect(result.data?.currentColor?.color, 0xff778899);
+    expect(result.data?.currentColor?.colorKey, 9);
+  });
+
+  test('ApplyEventChanges_RequiresAChange', () async {
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(),
     );
 
     expect(result.isSuccess, false);
