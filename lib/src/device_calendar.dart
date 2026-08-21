@@ -238,6 +238,7 @@ class DeviceCalendarPlugin {
     required String? calendarId,
     required String? eventId,
     required EventChangeSet changes,
+    EventRecurrenceChangeTarget? recurrenceTarget,
   }) async {
     return _invokeChannelMethod(
       ChannelConstants.methodNameApplyEventChanges,
@@ -249,11 +250,26 @@ class DeviceCalendarPlugin {
           ErrorCodes.invalidArguments,
           'Event ID and at least one event change are required.',
         );
+        _assertParameter(
+          result,
+          changes.hasValidTitleLength,
+          ErrorCodes.invalidArguments,
+          'Event titles cannot exceed ${changes.titleMaxLength} characters.',
+        );
+        _assertParameter(
+          result,
+          changes.hasValidDateRange,
+          ErrorCodes.invalidArguments,
+          'Event end dates cannot be before their start dates.',
+        );
       },
       arguments: () => <String, Object?>{
         ChannelConstants.parameterNameCalendarId: calendarId,
         ChannelConstants.parameterNameEventId: eventId,
         ChannelConstants.parameterNameEventChanges: changes.toJson(),
+        if (recurrenceTarget != null)
+          ChannelConstants.parameterNameRecurrenceChangeTarget:
+              recurrenceTarget.toJson(),
       },
       evaluateResponse: (rawData) {
         final Map<Object?, Object?> response =
@@ -279,6 +295,10 @@ class DeviceCalendarPlugin {
           switch (field) {
             case 'color':
               return EventChangeField.color;
+            case 'title':
+              return EventChangeField.title;
+            case 'dateRange':
+              return EventChangeField.dateRange;
             default:
               throw FormatException('Unknown conflicting field: $field');
           }
@@ -286,6 +306,9 @@ class DeviceCalendarPlugin {
         final Map<Object?, Object?> currentValues =
             Map<Object?, Object?>.from(response['currentValues'] as Map);
         final Object? rawCurrentColor = currentValues['color'];
+        final Object? rawCurrentTitle = currentValues['title'];
+        final Object? rawCurrentDateRange = currentValues['dateRange'];
+        final Object? rawResultingEventId = response['resultingEventId'];
 
         return EventChangeResult(
           outcome: outcome,
@@ -295,6 +318,13 @@ class DeviceCalendarPlugin {
                   Map<Object?, Object?>.from(rawCurrentColor),
                 )
               : null,
+          currentTitle: rawCurrentTitle is String ? rawCurrentTitle : null,
+          currentDateRange: rawCurrentDateRange is Map
+              ? EventDateRangeValue.fromJson(
+                  Map<Object?, Object?>.from(rawCurrentDateRange),
+                )
+              : null,
+          resultingEventId: rawResultingEventId?.toString(),
         );
       },
     );

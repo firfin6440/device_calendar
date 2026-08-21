@@ -54,6 +54,7 @@ class Constants {
         const val EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX: Int = 16
         const val EVENT_PROJECTION_ORIGINAL_ID_INDEX: Int = 17
         const val EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX: Int = 18
+        const val EVENT_PROJECTION_SYNC_ID_INDEX: Int = 19
 
         val EVENT_PROJECTION: Array<String> = arrayOf(
                 CalendarContract.Instances.EVENT_ID,
@@ -74,7 +75,8 @@ class Constants {
                 CalendarContract.Events.EVENT_COLOR,
                 CalendarContract.Events.EVENT_COLOR_KEY,
                 CalendarContract.Events.ORIGINAL_ID,
-                CalendarContract.Events.ORIGINAL_INSTANCE_TIME
+                CalendarContract.Events.ORIGINAL_INSTANCE_TIME,
+                CalendarContract.Events._SYNC_ID
         )
 
         const val MASTER_EVENT_PROJECTION_ID_INDEX: Int = 0
@@ -94,6 +96,7 @@ class Constants {
         const val MASTER_EVENT_PROJECTION_STATUS_INDEX: Int = 14
         const val MASTER_EVENT_PROJECTION_EVENT_COLOR_INDEX: Int = 15
         const val MASTER_EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX: Int = 16
+        const val MASTER_EVENT_PROJECTION_SYNC_ID_INDEX: Int = 17
 
         val MASTER_EVENT_PROJECTION: Array<String> = arrayOf(
             CalendarContract.Events._ID,
@@ -112,7 +115,8 @@ class Constants {
             CalendarContract.Events.AVAILABILITY,
             CalendarContract.Events.STATUS,
             CalendarContract.Events.EVENT_COLOR,
-            CalendarContract.Events.EVENT_COLOR_KEY
+            CalendarContract.Events.EVENT_COLOR_KEY,
+            CalendarContract.Events._SYNC_ID
         )
 
         const val EVENT_INSTANCE_DELETION_ID_INDEX: Int = 0
@@ -148,9 +152,11 @@ class Constants {
         )
 
         const val REMINDER_MINUTES_INDEX = 1
+        const val REMINDER_METHOD_INDEX = 2
         val REMINDER_PROJECTION: Array<String> = arrayOf(
             CalendarContract.Reminders.EVENT_ID,
-            CalendarContract.Reminders.MINUTES
+            CalendarContract.Reminders.MINUTES,
+            CalendarContract.Reminders.METHOD
         )
 
         const val AVAILABILITY_UNAVAILABLE = "UNAVAILABLE"

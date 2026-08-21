@@ -80,6 +80,7 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
 
     struct Reminder: Codable {
         let minutes: Int
+        let method: Int
     }
 
     enum Availability: String, Codable {
@@ -518,7 +519,8 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
         var reminders = [Reminder]()
         if ekEvent.alarms != nil {
             for alarm in ekEvent.alarms! {
-                reminders.append(Reminder(minutes: Int(-alarm.relativeOffset / 60)))
+                // EventKit alarms are delivered as local notifications.
+                reminders.append(Reminder(minutes: Int(-alarm.relativeOffset / 60), method: 1))
             }
         }
 

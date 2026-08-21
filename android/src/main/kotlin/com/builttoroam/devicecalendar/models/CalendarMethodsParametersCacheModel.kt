@@ -14,7 +14,8 @@ class CalendarMethodsParametersCacheModel(
     var attendeeEmail: String = "",
     var expectedAttendeeStatus: Int? = null,
     var newAttendeeStatus: Int? = null,
-    var eventChanges: Map<String, Any?> = emptyMap()
+    var eventChanges: Map<String, Any?> = emptyMap(),
+    var recurrenceChangeTarget: Map<String, Any?>? = null
 ) {
     var ownCacheKey: Int? = null
 }

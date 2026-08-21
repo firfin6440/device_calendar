@@ -3,6 +3,7 @@ package com.builttoroam.devicecalendar.models
 class Event {
     var eventTitle: String? = null
     var eventId: String? = null
+    var syncId: String? = null
     var calendarId: String? = null
     var eventIsDetached: Boolean = false
     var eventOriginalStartDate: Long? = null

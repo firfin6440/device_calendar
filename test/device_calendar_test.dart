@@ -223,6 +223,7 @@ void main() {
       return <String, Object>{
         'outcome': 'updated',
         'conflictingFields': <String>[],
+        'resultingEventId': 'new-series-id',
         'currentValues': <String, Object>{
           'color': <String, Object>{'color': 0xff445566, 'colorKey': 7},
         },
@@ -246,6 +247,7 @@ void main() {
     expect(result.data?.conflictingFields, isEmpty);
     expect(result.data?.currentColor?.color, 0xff445566);
     expect(result.data?.currentColor?.colorKey, 7);
+    expect(result.data?.resultingEventId, 'new-series-id');
     expect(log, <Matcher>[
       isMethodCall(
         'applyEventChanges',
@@ -267,6 +269,325 @@ void main() {
         },
       ),
     ]);
+  });
+
+  test('ApplyEventChanges_UpdatesTitleSurgically', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      log.add(methodCall);
+      return <String, Object>{
+        'outcome': 'updated',
+        'conflictingFields': <String>[],
+        'currentValues': <String, Object>{'title': 'Updated title'},
+      };
+    });
+
+    const EventChangeSet changes = EventChangeSet(
+      title: EventFieldChange<String>(
+        expected: 'Previous title',
+        requested: 'Updated title',
+      ),
+    );
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: changes,
+    );
+
+    expect(result.isSuccess, true);
+    expect(result.data?.outcome, EventChangeOutcome.updated);
+    expect(result.data?.currentTitle, 'Updated title');
+    expect(log, <Matcher>[
+      isMethodCall(
+        'applyEventChanges',
+        arguments: <String, dynamic>{
+          'calendarId': 'calendarId',
+          'eventId': 'eventId',
+          'eventChanges': <String, Object?>{
+            'title': <String, Object?>{
+              'expected': 'Previous title',
+              'requested': 'Updated title',
+            },
+          },
+        },
+      ),
+    ]);
+  });
+
+  test('ApplyEventChanges_SendsRecurringChangeTarget', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      log.add(methodCall);
+      return <String, Object>{
+        'outcome': 'updated',
+        'conflictingFields': <String>[],
+        'currentValues': <String, Object>{'title': 'Updated title'},
+      };
+    });
+
+    const recurrenceTarget = EventRecurrenceChangeTarget(
+      scope: EventRecurrenceChangeScope.thisAndFollowing,
+      originalOccurrenceStartMillisecondsSinceEpoch: 1787229000000,
+      originalEventId: 'masterEventId',
+      selectedOccurrenceWasDetached: true,
+    );
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'detachedEventId',
+      changes: const EventChangeSet(
+        title: EventFieldChange<String>(
+          expected: 'Previous title',
+          requested: 'Updated title',
+        ),
+      ),
+      recurrenceTarget: recurrenceTarget,
+    );
+
+    expect(result.isSuccess, true);
+    expect(log, <Matcher>[
+      isMethodCall(
+        'applyEventChanges',
+        arguments: <String, dynamic>{
+          'calendarId': 'calendarId',
+          'eventId': 'detachedEventId',
+          'eventChanges': <String, Object?>{
+            'title': <String, Object?>{
+              'expected': 'Previous title',
+              'requested': 'Updated title',
+            },
+          },
+          'recurrenceChangeTarget': <String, Object?>{
+            'scope': 'thisAndFollowing',
+            'originalOccurrenceStart': 1787229000000,
+            'originalEventId': 'masterEventId',
+            'selectedOccurrenceWasDetached': true,
+          },
+        },
+      ),
+    ]);
+  });
+
+  test('ApplyEventChanges_RejectsTitleLongerThanTheSharedLimit', () async {
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: EventChangeSet(
+        title: EventFieldChange<String>(
+          expected: 'Previous title',
+          requested: 'x' * (EventTitleConstraints.maxLength + 1),
+        ),
+      ),
+    );
+
+    expect(result.isSuccess, false);
+    expect(result.errors.first.errorCode, ErrorCodes.invalidArguments);
+    expect(log, isEmpty);
+  });
+
+  test('ApplyEventChanges_ReturnsCurrentTitleOnConflict', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      return <String, Object>{
+        'outcome': 'conflict',
+        'conflictingFields': <String>['title'],
+        'currentValues': <String, Object>{'title': 'Concurrent title'},
+      };
+    });
+
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        title: EventFieldChange<String?>(
+          expected: 'Previous title',
+          requested: 'Requested title',
+        ),
+      ),
+    );
+
+    expect(result.data?.outcome, EventChangeOutcome.conflict);
+    expect(
+      result.data?.conflictingFields,
+      <EventChangeField>{EventChangeField.title},
+    );
+    expect(result.data?.currentTitle, 'Concurrent title');
+  });
+
+  test('EventChangeSet_SerializesDateRangeAndTimeZonesAtomically', () {
+    const EventChangeSet changes = EventChangeSet(
+      dateRange: EventFieldChange<EventDateRangeValue>(
+        expected: EventDateRangeValue(
+          startMillisecondsSinceEpoch: 1000,
+          startTimeZone: 'Europe/London',
+          endMillisecondsSinceEpoch: 2000,
+          endTimeZone: 'Europe/London',
+          allDay: false,
+        ),
+        requested: EventDateRangeValue(
+          startMillisecondsSinceEpoch: 3000,
+          startTimeZone: 'Europe/Madrid',
+          endMillisecondsSinceEpoch: 4000,
+          endTimeZone: 'Europe/Madrid',
+          allDay: false,
+        ),
+      ),
+    );
+
+    expect(changes.isEmpty, false);
+    expect(changes.hasValidDateRange, true);
+    expect(changes.toJson(), <String, Object?>{
+      'dateRange': <String, Object?>{
+        'expected': <String, Object?>{
+          'startDate': 1000,
+          'startTimeZone': 'Europe/London',
+          'endDate': 2000,
+          'endTimeZone': 'Europe/London',
+          'allDay': false,
+        },
+        'requested': <String, Object?>{
+          'startDate': 3000,
+          'startTimeZone': 'Europe/Madrid',
+          'endDate': 4000,
+          'endTimeZone': 'Europe/Madrid',
+          'allDay': false,
+        },
+      },
+    });
+  });
+
+  test('ApplyEventChanges_UpdatesAndReturnsDateRangeAtomically', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      log.add(methodCall);
+      return <String, Object>{
+        'outcome': 'updated',
+        'conflictingFields': <String>[],
+        'currentValues': <String, Object>{
+          'dateRange': <String, Object>{
+            'startDate': 3000,
+            'startTimeZone': 'Europe/Madrid',
+            'endDate': 4000,
+            'endTimeZone': 'Europe/Madrid',
+            'allDay': false,
+          },
+        },
+      };
+    });
+
+    const EventChangeSet changes = EventChangeSet(
+      dateRange: EventFieldChange<EventDateRangeValue>(
+        expected: EventDateRangeValue(
+          startMillisecondsSinceEpoch: 1000,
+          startTimeZone: 'Europe/London',
+          endMillisecondsSinceEpoch: 2000,
+          endTimeZone: 'Europe/London',
+          allDay: false,
+        ),
+        requested: EventDateRangeValue(
+          startMillisecondsSinceEpoch: 3000,
+          startTimeZone: 'Europe/Madrid',
+          endMillisecondsSinceEpoch: 4000,
+          endTimeZone: 'Europe/Madrid',
+          allDay: false,
+        ),
+      ),
+    );
+
+    final Result<EventChangeResult> result =
+        await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: changes,
+    );
+
+    expect(result.data?.outcome, EventChangeOutcome.updated);
+    expect(
+      result.data?.currentDateRange?.startMillisecondsSinceEpoch,
+      3000,
+    );
+    expect(result.data?.currentDateRange?.startTimeZone, 'Europe/Madrid');
+    expect(log.single.arguments['eventChanges'], changes.toJson());
+  });
+
+  test('ApplyEventChanges_ReturnsTheWholeCurrentRangeOnConflict', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      return <String, Object>{
+        'outcome': 'conflict',
+        'conflictingFields': <String>['dateRange'],
+        'currentValues': <String, Object>{
+          'dateRange': <String, Object>{
+            'startDate': 5000,
+            'startTimeZone': 'Europe/Paris',
+            'endDate': 6000,
+            'endTimeZone': 'Europe/Paris',
+            'allDay': false,
+          },
+        },
+      };
+    });
+
+    final Result<EventChangeResult> result =
+        await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        dateRange: EventFieldChange<EventDateRangeValue>(
+          expected: EventDateRangeValue(
+            startMillisecondsSinceEpoch: 1000,
+            startTimeZone: 'Europe/London',
+            endMillisecondsSinceEpoch: 2000,
+            endTimeZone: 'Europe/London',
+            allDay: false,
+          ),
+          requested: EventDateRangeValue(
+            startMillisecondsSinceEpoch: 3000,
+            startTimeZone: 'Europe/Madrid',
+            endMillisecondsSinceEpoch: 4000,
+            endTimeZone: 'Europe/Madrid',
+            allDay: false,
+          ),
+        ),
+      ),
+    );
+
+    expect(result.data?.outcome, EventChangeOutcome.conflict);
+    expect(
+      result.data?.conflictingFields,
+      <EventChangeField>{EventChangeField.dateRange},
+    );
+    expect(result.data?.currentDateRange?.startTimeZone, 'Europe/Paris');
+    expect(result.data?.currentDateRange?.endMillisecondsSinceEpoch, 6000);
+  });
+
+  test('EventChangeSet_RejectsAnEndBeforeItsStart', () async {
+    final Result<EventChangeResult> result =
+        await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        dateRange: EventFieldChange<EventDateRangeValue>(
+          expected: EventDateRangeValue(
+            startMillisecondsSinceEpoch: 1000,
+            startTimeZone: 'Europe/London',
+            endMillisecondsSinceEpoch: 2000,
+            endTimeZone: 'Europe/London',
+            allDay: false,
+          ),
+          requested: EventDateRangeValue(
+            startMillisecondsSinceEpoch: 4000,
+            startTimeZone: 'Europe/Madrid',
+            endMillisecondsSinceEpoch: 3000,
+            endTimeZone: 'Europe/Madrid',
+            allDay: false,
+          ),
+        ),
+      ),
+    );
+
+    expect(result.isSuccess, false);
+    expect(result.errors.first.errorCode, ErrorCodes.invalidArguments);
+    expect(log, isEmpty);
   });
 
   test('ApplyEventChanges_ReturnsCurrentColorOnConflict', () async {
@@ -449,10 +770,11 @@ void main() {
       isOrganiser: true,
     );
     final recurrence = RecurrenceRule(frequency: Frequency.daily);
-    final reminder = Reminder(minutes: 10);
+    final reminder = Reminder(minutes: 10, method: ReminderMethod.email);
     var event = Event(
       'calendarId',
       eventId: 'eventId',
+      syncId: 'remote-sync-id',
       title: 'Test Event',
       start: startTime,
       location: 'Seattle, Washington',
@@ -476,6 +798,8 @@ void main() {
     expect(newEvent, isNotNull);
     expect(newEvent.calendarId, equals(event.calendarId));
     expect(newEvent.eventId, equals(event.eventId));
+    expect(newEvent.syncId, equals(event.syncId));
+    expect(stringEvent['syncId'], equals('remote-sync-id'));
     expect(newEvent.isDetached, isTrue);
     expect(
       newEvent.originalStart!.millisecondsSinceEpoch,
@@ -503,6 +827,7 @@ void main() {
     );
     expect(newEvent.reminders, isNotNull);
     expect(newEvent.reminders?.length, equals(1));
+    expect(newEvent.reminders?.single.method, ReminderMethod.email);
     expect(newEvent.availability, equals(event.availability));
     expect(newEvent.status, equals(event.status));
     expect(newEvent.color, equals(event.color));

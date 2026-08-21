@@ -31,6 +31,8 @@ class ChannelConstants {
       'expectedAttendeeStatus';
   static const String parameterNameNewAttendeeStatus = 'newAttendeeStatus';
   static const String parameterNameEventChanges = 'eventChanges';
+  static const String parameterNameRecurrenceChangeTarget =
+      'recurrenceChangeTarget';
   static const String parameterNameEventIds = 'eventIds';
   static const String parameterNameEventStartDate = 'eventStartDate';
   static const String parameterNameEventEndDate = 'eventEndDate';

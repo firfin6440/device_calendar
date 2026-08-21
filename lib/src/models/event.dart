@@ -11,6 +11,10 @@ class Event {
   /// Read-only. The unique identifier for this event. This is auto-generated when a new event is created
   String? eventId;
 
+  /// Read-only. Android exclusive. The identifier assigned by the event's
+  /// remote sync source. Null for events that have never been synced.
+  String? syncId;
+
   /// Read-only. The identifier of the calendar that this event is associated with
   String? calendarId;
 
@@ -79,6 +83,7 @@ class Event {
   Event(
     this.calendarId, {
     this.eventId,
+    this.syncId,
     this.title,
     this.start,
     this.end,
@@ -129,6 +134,7 @@ class Event {
     });
 
     eventId = json['eventId'];
+    syncId = json['syncId'];
     calendarId = json['calendarId'];
     isDetached = json['eventIsDetached'] ?? false;
     originalEventId = json['originalEventId'];
@@ -265,6 +271,7 @@ class Event {
 
     data['calendarId'] = calendarId;
     data['eventId'] = eventId;
+    data['syncId'] = syncId;
     data['eventIsDetached'] = isDetached;
     data['eventOriginalStartDate'] = originalStart?.millisecondsSinceEpoch;
     data['originalEventId'] = originalEventId;

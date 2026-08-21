@@ -8,16 +8,24 @@ enum EventChangeOutcome {
 
 enum EventChangeField {
   color,
+  title,
+  dateRange,
 }
 
 class EventChangeResult {
   final EventChangeOutcome outcome;
   final Set<EventChangeField> conflictingFields;
   final EventColorValue? currentColor;
+  final String? currentTitle;
+  final EventDateRangeValue? currentDateRange;
+  final String? resultingEventId;
 
   const EventChangeResult({
     required this.outcome,
     this.conflictingFields = const <EventChangeField>{},
     this.currentColor,
+    this.currentTitle,
+    this.currentDateRange,
+    this.resultingEventId,
   });
 }

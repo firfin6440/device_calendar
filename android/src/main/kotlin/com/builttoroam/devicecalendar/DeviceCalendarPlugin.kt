@@ -48,6 +48,7 @@ private const val ATTENDEE_EMAIL_ARGUMENT = "attendeeEmail"
 private const val EXPECTED_ATTENDEE_STATUS_ARGUMENT = "expectedAttendeeStatus"
 private const val NEW_ATTENDEE_STATUS_ARGUMENT = "newAttendeeStatus"
 private const val EVENT_CHANGES_ARGUMENT = "eventChanges"
+private const val RECURRENCE_CHANGE_TARGET_ARGUMENT = "recurrenceChangeTarget"
 private const val EVENT_TITLE_ARGUMENT = "eventTitle"
 private const val EVENT_LOCATION_ARGUMENT = "eventLocation"
 private const val EVENT_URL_ARGUMENT = "eventURL"
@@ -74,6 +75,7 @@ private const val EMAIL_ADDRESS_ARGUMENT = "emailAddress"
 private const val NAME_ARGUMENT = "name"
 private const val ROLE_ARGUMENT = "role"
 private const val REMINDERS_ARGUMENT = "reminders"
+private const val REMINDER_METHOD_ARGUMENT = "method"
 private const val MINUTES_ARGUMENT = "minutes"
 private const val FOLLOWING_INSTANCES = "followingInstances"
 private const val CALENDAR_COLOR_ARGUMENT = "calendarColor"
@@ -222,10 +224,13 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
                 val calendarId = call.argument<String>(CALENDAR_ID_ARGUMENT)
                 val eventId = call.argument<String>(EVENT_ID_ARGUMENT)
                 val eventChanges = call.argument<Map<String, Any?>>(EVENT_CHANGES_ARGUMENT)
+                val recurrenceChangeTarget =
+                    call.argument<Map<String, Any?>>(RECURRENCE_CHANGE_TARGET_ARGUMENT)
                 _calendarDelegate.applyEventChanges(
                     calendarId!!,
                     eventId!!,
                     eventChanges!!,
+                    recurrenceChangeTarget,
                     result
                 )
             }
@@ -358,7 +363,13 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
             event.reminders = mutableListOf()
             val remindersArgs = call.argument<List<Map<String, Any>>>(REMINDERS_ARGUMENT)!!
             for (reminderArgs in remindersArgs) {
-                event.reminders.add(Reminder(reminderArgs[MINUTES_ARGUMENT] as Int))
+                event.reminders.add(
+                    Reminder(
+                        reminderArgs[MINUTES_ARGUMENT] as Int,
+                        (reminderArgs[REMINDER_METHOD_ARGUMENT] as? Int)
+                            ?: android.provider.CalendarContract.Reminders.METHOD_ALERT
+                    )
+                )
             }
         }
         return event

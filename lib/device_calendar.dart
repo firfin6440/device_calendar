@@ -9,6 +9,7 @@ export 'src/models/reminder.dart';
 export 'src/models/event.dart';
 export 'src/models/event_change_result.dart';
 export 'src/models/event_change_set.dart';
+export 'src/models/event_recurrence_change_target.dart';
 export 'src/models/event_color.dart';
 export 'src/models/calendar_color.dart';
 export 'src/models/retrieve_events_params.dart';
