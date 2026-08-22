@@ -633,6 +633,91 @@ void main() {
     expect(result.errors.first.errorCode, ErrorCodes.invalidArguments);
   });
 
+  test('EventChangeSet_SerializesRemindersAsOneOptimisticField', () {
+    const EventChangeSet changes = EventChangeSet(
+      reminders: EventFieldChange<List<EventReminderValue>>(
+        expected: <EventReminderValue>[
+          EventReminderValue(minutes: 30, method: 2),
+        ],
+        requested: <EventReminderValue>[
+          EventReminderValue(minutes: 10, method: 1),
+          EventReminderValue(minutes: 30, method: 2),
+        ],
+      ),
+    );
+
+    expect(changes.isEmpty, false);
+    expect(changes.hasValidReminders, true);
+    expect(changes.toJson(), <String, Object?>{
+      'reminders': <String, Object?>{
+        'expected': <Object?>[
+          <String, Object?>{'minutes': 30, 'method': 2},
+        ],
+        'requested': <Object?>[
+          <String, Object?>{'minutes': 10, 'method': 1},
+          <String, Object?>{'minutes': 30, 'method': 2},
+        ],
+      },
+    });
+  });
+
+  test('ApplyEventChanges_ReturnsCurrentRemindersOnConflict', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      return <String, Object>{
+        'outcome': 'conflict',
+        'conflictingFields': <String>['reminders'],
+        'currentValues': <String, Object>{
+          'reminders': <Object>[
+            <String, Object>{'minutes': 15, 'method': 1},
+            <String, Object>{'minutes': 60, 'method': 2},
+          ],
+        },
+      };
+    });
+
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        reminders: EventFieldChange<List<EventReminderValue>>(
+          expected: <EventReminderValue>[],
+          requested: <EventReminderValue>[
+            EventReminderValue(minutes: 10, method: 1),
+          ],
+        ),
+      ),
+    );
+
+    expect(result.data?.outcome, EventChangeOutcome.conflict);
+    expect(
+      result.data?.conflictingFields,
+      <EventChangeField>{EventChangeField.reminders},
+    );
+    expect(result.data?.currentReminders?.length, 2);
+    expect(result.data?.currentReminders?.first.minutes, 15);
+    expect(result.data?.currentReminders?.last.method, 2);
+  });
+
+  test('ApplyEventChanges_RejectsInvalidReminders', () async {
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        reminders: EventFieldChange<List<EventReminderValue>>(
+          expected: <EventReminderValue>[],
+          requested: <EventReminderValue>[
+            EventReminderValue(minutes: -1, method: 1),
+          ],
+        ),
+      ),
+    );
+
+    expect(result.isSuccess, false);
+    expect(result.errors.first.errorCode, ErrorCodes.invalidArguments);
+    expect(log, isEmpty);
+  });
+
   test('DeleteEvent_CalendarId_IsRequired', () async {
     const String? calendarId = null;
     const eventId = 'fakeEventId';

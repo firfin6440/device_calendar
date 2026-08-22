@@ -262,6 +262,12 @@ class DeviceCalendarPlugin {
           ErrorCodes.invalidArguments,
           'Event end dates cannot be before their start dates.',
         );
+        _assertParameter(
+          result,
+          changes.hasValidReminders,
+          ErrorCodes.invalidArguments,
+          'Reminder minutes and methods must be non-negative.',
+        );
       },
       arguments: () => <String, Object?>{
         ChannelConstants.parameterNameCalendarId: calendarId,
@@ -299,6 +305,8 @@ class DeviceCalendarPlugin {
               return EventChangeField.title;
             case 'dateRange':
               return EventChangeField.dateRange;
+            case 'reminders':
+              return EventChangeField.reminders;
             default:
               throw FormatException('Unknown conflicting field: $field');
           }
@@ -308,6 +316,7 @@ class DeviceCalendarPlugin {
         final Object? rawCurrentColor = currentValues['color'];
         final Object? rawCurrentTitle = currentValues['title'];
         final Object? rawCurrentDateRange = currentValues['dateRange'];
+        final Object? rawCurrentReminders = currentValues['reminders'];
         final Object? rawResultingEventId = response['resultingEventId'];
 
         return EventChangeResult(
@@ -323,6 +332,13 @@ class DeviceCalendarPlugin {
               ? EventDateRangeValue.fromJson(
                   Map<Object?, Object?>.from(rawCurrentDateRange),
                 )
+              : null,
+          currentReminders: rawCurrentReminders is List
+              ? rawCurrentReminders
+                  .map((Object? reminder) => EventReminderValue.fromJson(
+                        Map<Object?, Object?>.from(reminder as Map),
+                      ))
+                  .toList(growable: false)
               : null,
           resultingEventId: rawResultingEventId?.toString(),
         );

@@ -3,6 +3,7 @@ package com.builttoroam.devicecalendar
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ContentResolver
+import android.content.ContentProviderOperation
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
@@ -813,6 +814,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
 
         val dateRangeChange = eventChanges["dateRange"] as? Map<*, *>
+        val remindersChange = eventChanges["reminders"] as? Map<*, *>
+        val requestedReminders =
+            parseEventReminderValues(remindersChange?.get("requested"))
         if (dateRangeChange == null) {
             applyEventChangesToEvent(
                 calendarId,
@@ -867,7 +871,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     eventChanges["title"] as? Map<*, *>,
                     requestedTitle(eventChanges),
                     dateRangeChange,
-                    requestedOccurrence
+                    requestedOccurrence,
+                    remindersChange,
+                    requestedReminders
                 ),
                 pendingChannelResult
             )
@@ -969,18 +975,33 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val colorChange = eventChanges["color"] as? Map<*, *>
         val titleChange = eventChanges["title"] as? Map<*, *>
         val dateRangeChange = eventChanges["dateRange"] as? Map<*, *>
+        val remindersChange = eventChanges["reminders"] as? Map<*, *>
         val expectedColor = colorChange?.get("expected") as? Map<*, *>
         val expectedColorValue = (expectedColor?.get("color") as? Number)?.toInt()
         val expectedColorKey = (expectedColor?.get("colorKey") as? Number)?.toInt()
         val expectedTitle = titleChange?.get("expected") as? String
         val expectedDateRange = parseEventDateRangeValue(dateRangeChange?.get("expected"))
         val requestedDateRange = parseEventDateRangeValue(dateRangeChange?.get("requested"))
+        val expectedReminders =
+            parseEventReminderValues(remindersChange?.get("expected"))
+        val requestedReminders =
+            parseEventReminderValues(remindersChange?.get("requested"))
+        if (remindersChange != null &&
+            (expectedReminders == null || requestedReminders == null)) {
+            finishWithError(
+                EC.INVALID_ARGUMENT,
+                "Invalid reminder changes",
+                pendingChannelResult
+            )
+            return
+        }
         val expectedStillMatches =
             (colorChange == null ||
                 (selectedValues.color == expectedColorValue &&
                     selectedValues.colorKey == expectedColorKey)) &&
                 (titleChange == null || selectedValues.title == expectedTitle) &&
-                (dateRangeChange == null || selectedRange == expectedDateRange)
+                (dateRangeChange == null || selectedRange == expectedDateRange) &&
+                (remindersChange == null || selectedValues.reminders == expectedReminders)
         if (!expectedStillMatches) {
             val occurrenceValues = selectedValues.copy(
                 rawStartDate = selectedRange.startDate,
@@ -999,7 +1020,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     titleChange,
                     requestedTitle(eventChanges),
                     dateRangeChange,
-                    requestedDateRange
+                    requestedDateRange,
+                    remindersChange,
+                    requestedReminders
                 ),
                 pendingChannelResult
             )
@@ -1099,56 +1122,141 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             futureEvent.eventColor = requestedColorValue(eventChanges)
             futureEvent.eventColorKey = requestedColorKey(eventChanges)
         }
+        if (remindersChange != null) {
+            futureEvent.reminders = requestedReminders!!.map {
+                Reminder(it.minutes, it.method)
+            }.toMutableList()
+        }
 
-        val oldMasterUri = ContentUris.withAppendedId(Events.CONTENT_URI, masterId)
-        val oldUpdated = resolver?.update(
-            oldMasterUri,
-            ContentValues().apply { put(Events.RRULE, oldRule.toString()) },
-            "${Events.RRULE} = ?",
-            arrayOf(rawRule)
-        ) ?: 0
-        if (oldUpdated == 0) {
+        if (resolver == null) {
+            finishWithError(
+                EC.GENERIC_ERROR,
+                "The Calendar Provider is unavailable",
+                pendingChannelResult
+            )
+            return
+        }
+
+        // Splitting a recurring series changes several provider tables. Keep
+        // the old rule, the new master, its children, and stale exception
+        // cleanup in one Calendar Provider transaction so a partial split can
+        // never leave the calendar in an inconsistent state.
+        val operations = ArrayList<ContentProviderOperation>()
+        operations.add(
+            ContentProviderOperation.newUpdate(Events.CONTENT_URI)
+                .withSelection(
+                    "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
+                        "${Events.RRULE} = ? AND ${Events.DELETED} != 1",
+                    arrayOf(masterEventId, calendarId, rawRule)
+                )
+                .withValue(Events.RRULE, oldRule.toString())
+                .withExpectedCount(1)
+                .build()
+        )
+        val futureEventInsertIndex = operations.size
+        operations.add(
+            ContentProviderOperation.newInsert(Events.CONTENT_URI)
+                .withValues(buildEventContentValues(futureEvent, calendarId))
+                .build()
+        )
+        futureEvent.attendees.forEach { attendee ->
+            operations.add(
+                ContentProviderOperation.newInsert(CalendarContract.Attendees.CONTENT_URI)
+                    .withValueBackReference(
+                        CalendarContract.Attendees.EVENT_ID,
+                        futureEventInsertIndex
+                    )
+                    .withValue(CalendarContract.Attendees.ATTENDEE_NAME, attendee.name)
+                    .withValue(
+                        CalendarContract.Attendees.ATTENDEE_EMAIL,
+                        attendee.emailAddress
+                    )
+                    .withValue(
+                        CalendarContract.Attendees.ATTENDEE_RELATIONSHIP,
+                        CalendarContract.Attendees.RELATIONSHIP_ATTENDEE
+                    )
+                    .withValue(CalendarContract.Attendees.ATTENDEE_TYPE, attendee.role)
+                    .withValue(
+                        CalendarContract.Attendees.ATTENDEE_STATUS,
+                        attendee.attendanceStatus
+                    )
+                    .build()
+            )
+        }
+        futureEvent.reminders.forEach { reminder ->
+            operations.add(
+                ContentProviderOperation.newInsert(CalendarContract.Reminders.CONTENT_URI)
+                    .withValueBackReference(
+                        CalendarContract.Reminders.EVENT_ID,
+                        futureEventInsertIndex
+                    )
+                    .withValue(CalendarContract.Reminders.MINUTES, reminder.minutes)
+                    .withValue(CalendarContract.Reminders.METHOD, reminder.method)
+                    .build()
+            )
+        }
+        val originalIds = listOfNotNull(
+            masterEventId,
+            queryMasterSyncId(resolver, masterId)
+        ).distinct()
+        if (originalIds.isNotEmpty()) {
+            val placeholders = originalIds.joinToString(",") { "?" }
+            operations.add(
+                ContentProviderOperation.newDelete(Events.CONTENT_URI)
+                    .withSelection(
+                        "${Events.CALENDAR_ID} = ? AND " +
+                            "${Events.ORIGINAL_INSTANCE_TIME} >= ? AND " +
+                            "${Events.ORIGINAL_ID} IN ($placeholders)",
+                        (listOf(
+                            calendarId,
+                            originalOccurrenceStart.toString()
+                        ) + originalIds).toTypedArray()
+                    )
+                    .build()
+            )
+        }
+
+        val results = try {
+            resolver.applyBatch(CalendarContract.AUTHORITY, operations)
+        } catch (_: android.content.OperationApplicationException) {
+            val latestValues = queryStoredEventChangeValues(
+                resolver,
+                calendarId,
+                if (selectedOccurrenceWasDetached) selectedEventId else masterEventId
+            ) ?: currentMaster
             finishWithSuccess(
                 eventChangeResultForCurrent(
-                    currentMaster,
+                    latestValues,
                     colorChange,
                     requestedColorValue(eventChanges),
                     requestedColorKey(eventChanges),
                     titleChange,
                     requestedTitle(eventChanges),
                     dateRangeChange,
-                    requestedDateRange
+                    requestedDateRange,
+                    remindersChange,
+                    requestedReminders
                 ),
                 pendingChannelResult
             )
             return
-        }
-
-        val newUri = resolver?.insert(
-            Events.CONTENT_URI,
-            buildEventContentValues(futureEvent, calendarId)
-        )
-        val newId = newUri?.lastPathSegment?.toLongOrNull()
-        if (newId == null) {
-            resolver?.update(
-                oldMasterUri,
-                ContentValues().apply { put(Events.RRULE, rawRule) },
-                null,
-                null
+        } catch (exception: Exception) {
+            finishWithError(
+                EC.GENERIC_ERROR,
+                exception.message ?: "The future recurring series could not be created",
+                pendingChannelResult
             )
-            finishWithError(EC.GENERIC_ERROR, "The future recurring series could not be created", pendingChannelResult)
             return
         }
-        insertAttendees(futureEvent.attendees, newId, resolver)
-        if (resolver != null) insertReminders(futureEvent.reminders, newId, resolver)
-        clearFutureRecurringExceptions(
-            resolver,
-            calendarId,
-            masterEventId,
-            currentMasterSyncId = queryMasterSyncId(resolver, masterId),
-            fromOriginalStart = originalOccurrenceStart,
-            excludedEventId = newId
-        )
+        val newId = results[futureEventInsertIndex].uri?.lastPathSegment?.toLongOrNull()
+        if (newId == null) {
+            finishWithError(
+                EC.GENERIC_ERROR,
+                "The future recurring series could not be created",
+                pendingChannelResult
+            )
+            return
+        }
         finishWithSuccess(
             eventChangeResult(
                 "updated",
@@ -1157,6 +1265,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 requestedColorKey(eventChanges),
                 requestedTitle(eventChanges),
                 requestedDateRange,
+                requestedReminders,
                 resultingEventId = newId.toString()
             ),
             pendingChannelResult
@@ -1226,12 +1335,16 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val colorChange = eventChanges["color"] as? Map<*, *>
         val titleChange = eventChanges["title"] as? Map<*, *>
         val dateRangeChange = eventChanges["dateRange"] as? Map<*, *>
+        val remindersChange = eventChanges["reminders"] as? Map<*, *>
         val expectedColor = colorChange?.get("expected") as? Map<*, *>
         val requestedColor = colorChange?.get("requested") as? Map<*, *>
         val expectedDateRange = parseEventDateRangeValue(dateRangeChange?.get("expected"))
         val requestedDateRange = parseEventDateRangeValue(dateRangeChange?.get("requested"))
+        val expectedReminders = parseEventReminderValues(remindersChange?.get("expected"))
+        val requestedReminders = parseEventReminderValues(remindersChange?.get("requested"))
         if (eventIdNumber == null || calendarIdNumber == null ||
-            (colorChange == null && titleChange == null && dateRangeChange == null) ||
+            (colorChange == null && titleChange == null && dateRangeChange == null &&
+                remindersChange == null) ||
             (colorChange != null && (expectedColor == null || requestedColor == null ||
                 !expectedColor.containsKey("color") || !expectedColor.containsKey("colorKey") ||
                 !requestedColor.containsKey("color") || !requestedColor.containsKey("colorKey"))) ||
@@ -1239,7 +1352,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 (titleChange["expected"] != null && titleChange["expected"] !is String) ||
                 titleChange["requested"] !is String)) ||
             (dateRangeChange != null &&
-                (expectedDateRange == null || requestedDateRange == null))
+                (expectedDateRange == null || requestedDateRange == null)) ||
+            (remindersChange != null &&
+                (expectedReminders == null || requestedReminders == null))
         ) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
@@ -1275,7 +1390,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 (currentValues.color == expectedColorValue &&
                     currentValues.colorKey == expectedColorKey)) &&
                 (titleChange == null || currentValues.title == expectedTitle) &&
-                (dateRangeChange == null || currentValues.dateRange == expectedDateRange)
+                (dateRangeChange == null || currentValues.dateRange == expectedDateRange) &&
+                (remindersChange == null || currentValues.reminders == expectedReminders)
         if (!expectedValuesStillMatch) {
             finishWithSuccess(
                 eventChangeResultForCurrent(
@@ -1286,7 +1402,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     titleChange,
                     requestedTitle,
                     dateRangeChange,
-                    requestedDateRange
+                    requestedDateRange,
+                    remindersChange,
+                    requestedReminders
                 ),
                 pendingChannelResult
             )
@@ -1397,13 +1515,80 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 }
             }
         }
-        val updatedRows = contentResolver?.update(
-            Events.CONTENT_URI,
-            values,
-            selectionParts.joinToString(" AND "),
-            selectionArgs.toTypedArray()
-        ) ?: 0
-        if (updatedRows > 0) {
+        if (contentResolver == null) {
+            finishWithError(
+                EC.GENERIC_ERROR,
+                "The Calendar Provider is unavailable",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val operations = ArrayList<ContentProviderOperation>()
+        val eventSelection = selectionParts.joinToString(" AND ")
+        val eventSelectionArgs = selectionArgs.toTypedArray()
+        if (values.size() > 0) {
+            operations.add(
+                ContentProviderOperation.newUpdate(Events.CONTENT_URI)
+                    .withSelection(eventSelection, eventSelectionArgs)
+                    .withValues(values)
+                    .withExpectedCount(1)
+                    .build()
+            )
+        } else {
+            operations.add(
+                ContentProviderOperation.newAssertQuery(Events.CONTENT_URI)
+                    .withSelection(eventSelection, eventSelectionArgs)
+                    .withExpectedCount(1)
+                    .build()
+            )
+        }
+
+        if (remindersChange != null) {
+            val reminderEventSelection = "${CalendarContract.Reminders.EVENT_ID} = ?"
+            val reminderEventSelectionArgs = arrayOf(eventId)
+            operations.add(
+                ContentProviderOperation.newAssertQuery(CalendarContract.Reminders.CONTENT_URI)
+                    .withSelection(reminderEventSelection, reminderEventSelectionArgs)
+                    .withExpectedCount(expectedReminders!!.size)
+                    .build()
+            )
+            expectedReminders.groupingBy { it }.eachCount().forEach { (reminder, count) ->
+                operations.add(
+                    ContentProviderOperation.newAssertQuery(CalendarContract.Reminders.CONTENT_URI)
+                        .withSelection(
+                            "$reminderEventSelection AND " +
+                                "${CalendarContract.Reminders.MINUTES} = ? AND " +
+                                "${CalendarContract.Reminders.METHOD} = ?",
+                            arrayOf(
+                                eventId,
+                                reminder.minutes.toString(),
+                                reminder.method.toString()
+                            )
+                        )
+                        .withExpectedCount(count)
+                        .build()
+                )
+            }
+            operations.add(
+                ContentProviderOperation.newDelete(CalendarContract.Reminders.CONTENT_URI)
+                    .withSelection(reminderEventSelection, reminderEventSelectionArgs)
+                    .withExpectedCount(expectedReminders.size)
+                    .build()
+            )
+            requestedReminders!!.forEach { reminder ->
+                operations.add(
+                    ContentProviderOperation.newInsert(CalendarContract.Reminders.CONTENT_URI)
+                        .withValue(CalendarContract.Reminders.EVENT_ID, eventIdNumber)
+                        .withValue(CalendarContract.Reminders.MINUTES, reminder.minutes)
+                        .withValue(CalendarContract.Reminders.METHOD, reminder.method)
+                        .build()
+                )
+            }
+        }
+
+        try {
+            contentResolver.applyBatch(CalendarContract.AUTHORITY, operations)
             finishWithSuccess(
                 eventChangeResult(
                     "updated",
@@ -1411,8 +1596,19 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     requestedColorValue,
                     requestedColorKey,
                     requestedTitle,
-                    requestedDateRange
+                    requestedDateRange,
+                    requestedReminders
                 ),
+                pendingChannelResult
+            )
+            return
+        } catch (_: android.content.OperationApplicationException) {
+            // One of the optimistic assertions failed. Re-read every field so
+            // the caller can resolve the complete concurrent change.
+        } catch (exception: Exception) {
+            finishWithError(
+                EC.GENERIC_ERROR,
+                exception.message ?: "The event changes could not be applied",
                 pendingChannelResult
             )
             return
@@ -1437,7 +1633,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 titleChange,
                 requestedTitle,
                 dateRangeChange,
-                requestedDateRange
+                requestedDateRange,
+                remindersChange,
+                requestedReminders
             ),
             pendingChannelResult
         )
@@ -1470,10 +1668,22 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val colorChange = eventChanges["color"] as? Map<*, *>
         val titleChange = eventChanges["title"] as? Map<*, *>
         val dateRangeChange = eventChanges["dateRange"] as? Map<*, *>
+        val remindersChange = eventChanges["reminders"] as? Map<*, *>
         val expectedColor = colorChange?.get("expected") as? Map<*, *>
         val requestedColor = colorChange?.get("requested") as? Map<*, *>
         val expectedDateRange = parseEventDateRangeValue(dateRangeChange?.get("expected"))
         val requestedDateRange = parseEventDateRangeValue(dateRangeChange?.get("requested"))
+        val expectedReminders = parseEventReminderValues(remindersChange?.get("expected"))
+        val requestedReminders = parseEventReminderValues(remindersChange?.get("requested"))
+        if (remindersChange != null &&
+            (expectedReminders == null || requestedReminders == null)) {
+            finishWithError(
+                EC.INVALID_ARGUMENT,
+                "Invalid reminder changes",
+                pendingChannelResult
+            )
+            return
+        }
         val expectedTitle = titleChange?.get("expected") as? String
         val requestedTitle = titleChange?.get("requested") as? String
         val expectedColorValue = (expectedColor?.get("color") as? Number)?.toInt()
@@ -1497,7 +1707,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 (currentMaster.color == expectedColorValue &&
                     currentMaster.colorKey == expectedColorKey)) &&
                 (titleChange == null || currentMaster.title == expectedTitle) &&
-                (dateRangeChange == null || occurrenceCurrentRange == expectedDateRange)
+                (dateRangeChange == null || occurrenceCurrentRange == expectedDateRange) &&
+                (remindersChange == null || currentMaster.reminders == expectedReminders)
         if (!expectedStillMatches) {
             val occurrenceValues = currentMaster.copy(
                 rawStartDate = occurrenceCurrentRange?.startDate,
@@ -1517,7 +1728,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     titleChange,
                     requestedTitle,
                     dateRangeChange,
-                    requestedDateRange
+                    requestedDateRange,
+                    remindersChange,
+                    requestedReminders
                 ),
                 pendingChannelResult
             )
@@ -1555,8 +1768,184 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             Events.CONTENT_EXCEPTION_URI,
             masterId
         )
-        val inserted = contentResolver?.insert(exceptionUri, values)
-        if (inserted == null) {
+        if (contentResolver == null) {
+            finishWithError(
+                EC.GENERIC_ERROR,
+                "The Calendar Provider is unavailable",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val operations = ArrayList<ContentProviderOperation>()
+        val masterSelectionParts = mutableListOf(
+            "${Events._ID} = ?",
+            "${Events.CALENDAR_ID} = ?",
+            "${Events.DELETED} != 1",
+            "${Events.RRULE} = ?"
+        )
+        val masterSelectionArgs = mutableListOf(
+            masterEventId,
+            calendarId,
+            currentMaster.recurrenceRule!!
+        )
+        if (colorChange != null) {
+            if (expectedColorValue == null) {
+                masterSelectionParts.add(
+                    "(${Events.EVENT_COLOR} IS NULL OR ${Events.EVENT_COLOR} = 0)"
+                )
+            } else {
+                masterSelectionParts.add("${Events.EVENT_COLOR} = ?")
+                masterSelectionArgs.add(expectedColorValue.toString())
+            }
+            if (expectedColorKey == null) {
+                masterSelectionParts.add(
+                    "(${Events.EVENT_COLOR_KEY} IS NULL OR ${Events.EVENT_COLOR_KEY} = 0)"
+                )
+            } else {
+                masterSelectionParts.add("${Events.EVENT_COLOR_KEY} = ?")
+                masterSelectionArgs.add(expectedColorKey.toString())
+            }
+        }
+        if (titleChange != null) {
+            if (expectedTitle == null) {
+                masterSelectionParts.add("${Events.TITLE} IS NULL")
+            } else {
+                masterSelectionParts.add("${Events.TITLE} = ?")
+                masterSelectionArgs.add(expectedTitle)
+            }
+        }
+        if (dateRangeChange != null) {
+            addNullableSelection(
+                masterSelectionParts,
+                masterSelectionArgs,
+                Events.DTSTART,
+                currentMaster.rawStartDate
+            )
+            addNullableSelection(
+                masterSelectionParts,
+                masterSelectionArgs,
+                Events.EVENT_TIMEZONE,
+                currentMaster.rawStartTimeZone
+            )
+            addNullableSelection(
+                masterSelectionParts,
+                masterSelectionArgs,
+                Events.DURATION,
+                currentMaster.duration
+            )
+            masterSelectionParts.add("${Events.ALL_DAY} = ?")
+            masterSelectionArgs.add(if (currentMaster.allDay) "1" else "0")
+        }
+        operations.add(
+            ContentProviderOperation.newAssertQuery(Events.CONTENT_URI)
+                .withSelection(
+                    masterSelectionParts.joinToString(" AND "),
+                    masterSelectionArgs.toTypedArray()
+                )
+                .withExpectedCount(1)
+                .build()
+        )
+        if (remindersChange != null) {
+            val reminderEventSelection = "${CalendarContract.Reminders.EVENT_ID} = ?"
+            operations.add(
+                ContentProviderOperation.newAssertQuery(CalendarContract.Reminders.CONTENT_URI)
+                    .withSelection(reminderEventSelection, arrayOf(masterEventId))
+                    .withExpectedCount(expectedReminders!!.size)
+                    .build()
+            )
+            expectedReminders.groupingBy { it }.eachCount().forEach { (reminder, count) ->
+                operations.add(
+                    ContentProviderOperation.newAssertQuery(CalendarContract.Reminders.CONTENT_URI)
+                        .withSelection(
+                            "$reminderEventSelection AND " +
+                                "${CalendarContract.Reminders.MINUTES} = ? AND " +
+                                "${CalendarContract.Reminders.METHOD} = ?",
+                            arrayOf(
+                                masterEventId,
+                                reminder.minutes.toString(),
+                                reminder.method.toString()
+                            )
+                        )
+                        .withExpectedCount(count)
+                        .build()
+                )
+            }
+        }
+        val exceptionInsertIndex = operations.size
+        operations.add(
+            ContentProviderOperation.newInsert(exceptionUri)
+                .withValues(values)
+                .build()
+        )
+        val finalReminders = requestedReminders ?: currentMaster.reminders
+        finalReminders.forEach { reminder ->
+            operations.add(
+                ContentProviderOperation.newInsert(CalendarContract.Reminders.CONTENT_URI)
+                    .withValueBackReference(
+                        CalendarContract.Reminders.EVENT_ID,
+                        exceptionInsertIndex
+                    )
+                    .withValue(CalendarContract.Reminders.MINUTES, reminder.minutes)
+                    .withValue(CalendarContract.Reminders.METHOD, reminder.method)
+                    .build()
+            )
+        }
+
+        val results = try {
+            contentResolver.applyBatch(CalendarContract.AUTHORITY, operations)
+        } catch (_: android.content.OperationApplicationException) {
+            val latestMaster = queryStoredEventChangeValues(
+                contentResolver,
+                calendarId,
+                masterEventId
+            ) ?: currentMaster
+            val latestMasterRange = latestMaster.dateRange
+            val latestOccurrenceRange = latestMasterRange?.let {
+                EventDateRangeValue(
+                    startDate = originalOccurrenceStart,
+                    startTimeZone = it.startTimeZone,
+                    endDate = originalOccurrenceStart + (it.endDate - it.startDate),
+                    endTimeZone = it.endTimeZone,
+                    allDay = it.allDay
+                )
+            }
+            val latestOccurrenceValues = latestMaster.copy(
+                rawStartDate = latestOccurrenceRange?.startDate,
+                rawEndDate = latestOccurrenceRange?.endDate,
+                duration = null,
+                rawStartTimeZone = latestOccurrenceRange?.startTimeZone,
+                rawEndTimeZone = latestOccurrenceRange?.endTimeZone,
+                allDay = latestOccurrenceRange?.allDay ?: latestMaster.allDay,
+                recurrenceRule = null
+            )
+            finishWithSuccess(
+                eventChangeResultForCurrent(
+                    latestOccurrenceValues,
+                    colorChange,
+                    requestedColorValue,
+                    requestedColorKey,
+                    titleChange,
+                    requestedTitle,
+                    dateRangeChange,
+                    requestedDateRange,
+                    remindersChange,
+                    requestedReminders
+                ),
+                pendingChannelResult
+            )
+            return
+        } catch (exception: Exception) {
+            finishWithError(
+                EC.GENERIC_ERROR,
+                exception.message ?: "The recurring occurrence could not be updated",
+                pendingChannelResult
+            )
+            return
+        }
+        val insertedEventId =
+            results[exceptionInsertIndex].uri?.lastPathSegment?.toLongOrNull()
+        if (insertedEventId == null) {
             finishWithError(
                 EC.GENERIC_ERROR,
                 "The recurring occurrence could not be updated",
@@ -1571,7 +1960,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 requestedColorValue,
                 requestedColorKey,
                 requestedTitle,
-                requestedDateRange
+                requestedDateRange,
+                requestedReminders,
+                resultingEventId = insertedEventId.toString()
             ),
             pendingChannelResult
         )
@@ -1584,6 +1975,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         colorKey: Int?,
         title: String?,
         dateRange: EventDateRangeValue?,
+        reminders: List<EventReminderValue>? = null,
         resultingEventId: String? = null
     ): Map<String, Any?> {
         return mapOf(
@@ -1593,7 +1985,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             "currentValues" to mapOf(
                 "color" to mapOf("color" to color, "colorKey" to colorKey),
                 "title" to title,
-                "dateRange" to dateRange?.toMap()
+                "dateRange" to dateRange?.toMap(),
+                "reminders" to reminders?.map(EventReminderValue::toMap)
             )
         )
     }
@@ -1609,7 +2002,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val rawStartTimeZone: String?,
         val rawEndTimeZone: String?,
         val allDay: Boolean,
-        val recurrenceRule: String?
+        val recurrenceRule: String?,
+        val reminders: List<EventReminderValue>
     ) {
         val dateRange: EventDateRangeValue?
             get() {
@@ -1664,7 +2058,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 rawStartTimeZone = if (it.isNull(7)) null else it.getString(7),
                 rawEndTimeZone = if (it.isNull(8)) null else it.getString(8),
                 allDay = it.getInt(9) == 1,
-                recurrenceRule = if (it.isNull(10)) null else it.getString(10)
+                recurrenceRule = if (it.isNull(10)) null else it.getString(10),
+                reminders = retrieveReminders(eventId, contentResolver)
+                    .map { reminder ->
+                        EventReminderValue(reminder.minutes, reminder.method)
+                    }
+                    .sortedWith(
+                        compareBy(EventReminderValue::minutes, EventReminderValue::method)
+                    )
             )
         }
     }
@@ -1691,7 +2092,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         titleChange: Map<*, *>?,
         requestedTitle: String?,
         dateRangeChange: Map<*, *>?,
-        requestedDateRange: EventDateRangeValue?
+        requestedDateRange: EventDateRangeValue?,
+        remindersChange: Map<*, *>? = null,
+        requestedReminders: List<EventReminderValue>? = null
     ): Map<String, Any?> {
         val conflictingFields = mutableListOf<String>()
         if (colorChange != null &&
@@ -1704,13 +2107,17 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (dateRangeChange != null && current.dateRange != requestedDateRange) {
             conflictingFields.add("dateRange")
         }
+        if (remindersChange != null && current.reminders != requestedReminders) {
+            conflictingFields.add("reminders")
+        }
         return eventChangeResult(
             if (conflictingFields.isEmpty()) "alreadyCurrent" else "conflict",
             conflictingFields,
             current.color,
             current.colorKey,
             current.title,
-            current.dateRange
+            current.dateRange,
+            current.reminders
         )
     }
 

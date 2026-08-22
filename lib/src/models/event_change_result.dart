@@ -10,6 +10,7 @@ enum EventChangeField {
   color,
   title,
   dateRange,
+  reminders,
 }
 
 class EventChangeResult {
@@ -18,6 +19,7 @@ class EventChangeResult {
   final EventColorValue? currentColor;
   final String? currentTitle;
   final EventDateRangeValue? currentDateRange;
+  final List<EventReminderValue>? currentReminders;
   final String? resultingEventId;
 
   const EventChangeResult({
@@ -26,6 +28,7 @@ class EventChangeResult {
     this.currentColor,
     this.currentTitle,
     this.currentDateRange,
+    this.currentReminders,
     this.resultingEventId,
   });
 }

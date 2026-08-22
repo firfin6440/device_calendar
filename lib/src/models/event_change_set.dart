@@ -33,6 +33,28 @@ class EventColorValue {
   }
 }
 
+class EventReminderValue {
+  final int minutes;
+  final int method;
+
+  const EventReminderValue({
+    required this.minutes,
+    required this.method,
+  });
+
+  factory EventReminderValue.fromJson(Map<Object?, Object?> json) {
+    return EventReminderValue(
+      minutes: json['minutes'] as int,
+      method: json['method'] as int,
+    );
+  }
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'minutes': minutes,
+        'method': method,
+      };
+}
+
 class EventDateRangeValue {
   final int startMillisecondsSinceEpoch;
   final String startTimeZone;
@@ -96,16 +118,19 @@ class EventChangeSet {
   final EventFieldChange<EventColorValue>? color;
   final EventFieldChange<String?>? title;
   final EventFieldChange<EventDateRangeValue>? dateRange;
+  final EventFieldChange<List<EventReminderValue>>? reminders;
   final int titleMaxLength;
 
   const EventChangeSet({
     this.color,
     this.title,
     this.dateRange,
+    this.reminders,
     this.titleMaxLength = EventTitleConstraints.maxLength,
   }) : assert(titleMaxLength > 0);
 
-  bool get isEmpty => color == null && title == null && dateRange == null;
+  bool get isEmpty =>
+      color == null && title == null && dateRange == null && reminders == null;
 
   bool get hasValidTitleLength {
     final String? requestedTitle = title?.requested;
@@ -117,6 +142,14 @@ class EventChangeSet {
       dateRange == null ||
       (dateRange!.expected.isChronological &&
           dateRange!.requested.isChronological);
+
+  bool get hasValidReminders =>
+      reminders == null ||
+      <EventReminderValue>[
+        ...reminders!.expected,
+        ...reminders!.requested,
+      ].every((EventReminderValue reminder) =>
+          reminder.minutes >= 0 && reminder.method >= 0);
 
   Map<String, Object?> toJson() {
     final EventFieldChange<EventColorValue>? colorChange = color;
@@ -135,6 +168,15 @@ class EventChangeSet {
         'dateRange': <String, Object?>{
           'expected': dateRange!.expected.toJson(),
           'requested': dateRange!.requested.toJson(),
+        },
+      if (reminders != null)
+        'reminders': <String, Object?>{
+          'expected': reminders!.expected
+              .map((EventReminderValue reminder) => reminder.toJson())
+              .toList(growable: false),
+          'requested': reminders!.requested
+              .map((EventReminderValue reminder) => reminder.toJson())
+              .toList(growable: false),
         },
     };
   }
