@@ -117,6 +117,7 @@ class EventTitleConstraints {
 class EventChangeSet {
   final EventFieldChange<EventColorValue>? color;
   final EventFieldChange<String?>? title;
+  final EventFieldChange<String?>? location;
   final EventFieldChange<EventDateRangeValue>? dateRange;
   final EventFieldChange<List<EventReminderValue>>? reminders;
   final int titleMaxLength;
@@ -124,13 +125,18 @@ class EventChangeSet {
   const EventChangeSet({
     this.color,
     this.title,
+    this.location,
     this.dateRange,
     this.reminders,
     this.titleMaxLength = EventTitleConstraints.maxLength,
   }) : assert(titleMaxLength > 0);
 
   bool get isEmpty =>
-      color == null && title == null && dateRange == null && reminders == null;
+      color == null &&
+      title == null &&
+      location == null &&
+      dateRange == null &&
+      reminders == null;
 
   bool get hasValidTitleLength {
     final String? requestedTitle = title?.requested;
@@ -163,6 +169,11 @@ class EventChangeSet {
         'title': <String, Object?>{
           'expected': title!.expected,
           'requested': title!.requested,
+        },
+      if (location != null)
+        'location': <String, Object?>{
+          'expected': location!.expected,
+          'requested': location!.requested,
         },
       if (dateRange != null)
         'dateRange': <String, Object?>{

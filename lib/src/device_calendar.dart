@@ -303,6 +303,8 @@ class DeviceCalendarPlugin {
               return EventChangeField.color;
             case 'title':
               return EventChangeField.title;
+            case 'location':
+              return EventChangeField.location;
             case 'dateRange':
               return EventChangeField.dateRange;
             case 'reminders':
@@ -315,6 +317,7 @@ class DeviceCalendarPlugin {
             Map<Object?, Object?>.from(response['currentValues'] as Map);
         final Object? rawCurrentColor = currentValues['color'];
         final Object? rawCurrentTitle = currentValues['title'];
+        final Object? rawCurrentLocation = currentValues['location'];
         final Object? rawCurrentDateRange = currentValues['dateRange'];
         final Object? rawCurrentReminders = currentValues['reminders'];
         final Object? rawResultingEventId = response['resultingEventId'];
@@ -328,6 +331,8 @@ class DeviceCalendarPlugin {
                 )
               : null,
           currentTitle: rawCurrentTitle is String ? rawCurrentTitle : null,
+          currentLocation:
+              rawCurrentLocation is String ? rawCurrentLocation : null,
           currentDateRange: rawCurrentDateRange is Map
               ? EventDateRangeValue.fromJson(
                   Map<Object?, Object?>.from(rawCurrentDateRange),

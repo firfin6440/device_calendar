@@ -413,6 +413,54 @@ void main() {
     expect(result.data?.currentTitle, 'Concurrent title');
   });
 
+  test('ApplyEventChanges_ReturnsCurrentLocationOnConflict', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      return <String, Object>{
+        'outcome': 'conflict',
+        'conflictingFields': <String>['location'],
+        'currentValues': <String, Object>{
+          'location': 'Concurrent location',
+        },
+      };
+    });
+
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        location: EventFieldChange<String?>(
+          expected: 'Previous location',
+          requested: 'Requested location',
+        ),
+      ),
+    );
+
+    expect(result.data?.outcome, EventChangeOutcome.conflict);
+    expect(
+      result.data?.conflictingFields,
+      <EventChangeField>{EventChangeField.location},
+    );
+    expect(result.data?.currentLocation, 'Concurrent location');
+  });
+
+  test('EventChangeSet_SerializesNullableLocationAtomically', () {
+    const EventChangeSet changes = EventChangeSet(
+      location: EventFieldChange<String?>(
+        expected: 'Room A',
+        requested: null,
+      ),
+    );
+
+    expect(changes.isEmpty, false);
+    expect(changes.toJson(), <String, Object?>{
+      'location': <String, Object?>{
+        'expected': 'Room A',
+        'requested': null,
+      },
+    });
+  });
+
   test('EventChangeSet_SerializesDateRangeAndTimeZonesAtomically', () {
     const EventChangeSet changes = EventChangeSet(
       dateRange: EventFieldChange<EventDateRangeValue>(

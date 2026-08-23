@@ -815,6 +815,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
         val dateRangeChange = eventChanges["dateRange"] as? Map<*, *>
         val remindersChange = eventChanges["reminders"] as? Map<*, *>
+        val locationChange = eventChanges["location"] as? Map<*, *>
         val requestedReminders =
             parseEventReminderValues(remindersChange?.get("requested"))
         if (dateRangeChange == null) {
@@ -873,7 +874,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     dateRangeChange,
                     requestedOccurrence,
                     remindersChange,
-                    requestedReminders
+                    requestedReminders,
+                    locationChange,
+                    requestedLocation(eventChanges)
                 ),
                 pendingChannelResult
             )
@@ -917,6 +920,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
     private fun requestedTitle(eventChanges: Map<String, Any?>): String? =
         ((eventChanges["title"] as? Map<*, *>)?.get("requested") as? String)
+
+    private fun requestedLocation(eventChanges: Map<String, Any?>): String? =
+        ((eventChanges["location"] as? Map<*, *>)?.get("requested") as? String)
 
     private fun applyEventChangesToThisAndFollowing(
         calendarId: String,
@@ -974,12 +980,15 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
         val colorChange = eventChanges["color"] as? Map<*, *>
         val titleChange = eventChanges["title"] as? Map<*, *>
+        val locationChange = eventChanges["location"] as? Map<*, *>
         val dateRangeChange = eventChanges["dateRange"] as? Map<*, *>
         val remindersChange = eventChanges["reminders"] as? Map<*, *>
         val expectedColor = colorChange?.get("expected") as? Map<*, *>
         val expectedColorValue = (expectedColor?.get("color") as? Number)?.toInt()
         val expectedColorKey = (expectedColor?.get("colorKey") as? Number)?.toInt()
         val expectedTitle = titleChange?.get("expected") as? String
+        val expectedLocation = locationChange?.get("expected") as? String
+        val requestedLocation = requestedLocation(eventChanges)
         val expectedDateRange = parseEventDateRangeValue(dateRangeChange?.get("expected"))
         val requestedDateRange = parseEventDateRangeValue(dateRangeChange?.get("requested"))
         val expectedReminders =
@@ -1000,6 +1009,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 (selectedValues.color == expectedColorValue &&
                     selectedValues.colorKey == expectedColorKey)) &&
                 (titleChange == null || selectedValues.title == expectedTitle) &&
+                (locationChange == null || selectedValues.location == expectedLocation) &&
                 (dateRangeChange == null || selectedRange == expectedDateRange) &&
                 (remindersChange == null || selectedValues.reminders == expectedReminders)
         if (!expectedStillMatches) {
@@ -1022,7 +1032,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     dateRangeChange,
                     requestedDateRange,
                     remindersChange,
-                    requestedReminders
+                    requestedReminders,
+                    locationChange,
+                    requestedLocation
                 ),
                 pendingChannelResult
             )
@@ -1118,6 +1130,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         futureEvent.eventAllDay = finalRange.allDay
         futureEvent.recurrenceRule = parseRecurrenceRuleString(futureRule.toString())
         if (titleChange != null) futureEvent.eventTitle = requestedTitle(eventChanges)
+        if (locationChange != null) futureEvent.eventLocation = requestedLocation
         if (colorChange != null) {
             futureEvent.eventColor = requestedColorValue(eventChanges)
             futureEvent.eventColorKey = requestedColorKey(eventChanges)
@@ -1235,7 +1248,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     dateRangeChange,
                     requestedDateRange,
                     remindersChange,
-                    requestedReminders
+                    requestedReminders,
+                    locationChange,
+                    requestedLocation
                 ),
                 pendingChannelResult
             )
@@ -1266,7 +1281,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 requestedTitle(eventChanges),
                 requestedDateRange,
                 requestedReminders,
-                resultingEventId = newId.toString()
+                resultingEventId = newId.toString(),
+                location = requestedLocation
             ),
             pendingChannelResult
         )
@@ -1334,6 +1350,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val calendarIdNumber = calendarId.toLongOrNull()
         val colorChange = eventChanges["color"] as? Map<*, *>
         val titleChange = eventChanges["title"] as? Map<*, *>
+        val locationChange = eventChanges["location"] as? Map<*, *>
         val dateRangeChange = eventChanges["dateRange"] as? Map<*, *>
         val remindersChange = eventChanges["reminders"] as? Map<*, *>
         val expectedColor = colorChange?.get("expected") as? Map<*, *>
@@ -1343,7 +1360,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val expectedReminders = parseEventReminderValues(remindersChange?.get("expected"))
         val requestedReminders = parseEventReminderValues(remindersChange?.get("requested"))
         if (eventIdNumber == null || calendarIdNumber == null ||
-            (colorChange == null && titleChange == null && dateRangeChange == null &&
+            (colorChange == null && titleChange == null && locationChange == null && dateRangeChange == null &&
                 remindersChange == null) ||
             (colorChange != null && (expectedColor == null || requestedColor == null ||
                 !expectedColor.containsKey("color") || !expectedColor.containsKey("colorKey") ||
@@ -1351,6 +1368,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             (titleChange != null && (!titleChange.containsKey("expected") ||
                 (titleChange["expected"] != null && titleChange["expected"] !is String) ||
                 titleChange["requested"] !is String)) ||
+            (locationChange != null && (!locationChange.containsKey("expected") ||
+                !locationChange.containsKey("requested") ||
+                (locationChange["expected"] != null && locationChange["expected"] !is String) ||
+                (locationChange["requested"] != null && locationChange["requested"] !is String))) ||
             (dateRangeChange != null &&
                 (expectedDateRange == null || requestedDateRange == null)) ||
             (remindersChange != null &&
@@ -1370,6 +1391,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val requestedColorKey = (requestedColor?.get("colorKey") as? Number)?.toInt()
         val expectedTitle = titleChange?.get("expected") as? String
         val requestedTitle = titleChange?.get("requested") as? String
+        val expectedLocation = locationChange?.get("expected") as? String
+        val requestedLocation = locationChange?.get("requested") as? String
         val contentResolver = _context?.contentResolver
         val currentValues = queryStoredEventChangeValues(
             contentResolver,
@@ -1390,6 +1413,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 (currentValues.color == expectedColorValue &&
                     currentValues.colorKey == expectedColorKey)) &&
                 (titleChange == null || currentValues.title == expectedTitle) &&
+                (locationChange == null || currentValues.location == expectedLocation) &&
                 (dateRangeChange == null || currentValues.dateRange == expectedDateRange) &&
                 (remindersChange == null || currentValues.reminders == expectedReminders)
         if (!expectedValuesStillMatch) {
@@ -1404,7 +1428,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     dateRangeChange,
                     requestedDateRange,
                     remindersChange,
-                    requestedReminders
+                    requestedReminders,
+                    locationChange,
+                    requestedLocation
                 ),
                 pendingChannelResult
             )
@@ -1448,6 +1474,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 selectionParts.add("${Events.TITLE} = ?")
                 selectionArgs.add(expectedTitle)
             }
+        }
+        if (locationChange != null) {
+            addNullableSelection(
+                selectionParts,
+                selectionArgs,
+                Events.EVENT_LOCATION,
+                expectedLocation
+            )
         }
         if (dateRangeChange != null) {
             addNullableSelection(
@@ -1500,6 +1534,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 }
             }
             if (titleChange != null) put(Events.TITLE, requestedTitle)
+            if (locationChange != null) {
+                if (requestedLocation == null) putNull(Events.EVENT_LOCATION)
+                else put(Events.EVENT_LOCATION, requestedLocation)
+            }
             if (dateRangeChange != null) {
                 put(Events.DTSTART, requestedDateRange!!.startDate)
                 put(Events.EVENT_TIMEZONE, requestedDateRange.startTimeZone)
@@ -1597,7 +1635,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     requestedColorKey,
                     requestedTitle,
                     requestedDateRange,
-                    requestedReminders
+                    requestedReminders,
+                    location = requestedLocation
                 ),
                 pendingChannelResult
             )
@@ -1635,7 +1674,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 dateRangeChange,
                 requestedDateRange,
                 remindersChange,
-                requestedReminders
+                requestedReminders,
+                locationChange,
+                requestedLocation
             ),
             pendingChannelResult
         )
@@ -1667,6 +1708,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
         val colorChange = eventChanges["color"] as? Map<*, *>
         val titleChange = eventChanges["title"] as? Map<*, *>
+        val locationChange = eventChanges["location"] as? Map<*, *>
         val dateRangeChange = eventChanges["dateRange"] as? Map<*, *>
         val remindersChange = eventChanges["reminders"] as? Map<*, *>
         val expectedColor = colorChange?.get("expected") as? Map<*, *>
@@ -1686,6 +1728,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
         val expectedTitle = titleChange?.get("expected") as? String
         val requestedTitle = titleChange?.get("requested") as? String
+        val expectedLocation = locationChange?.get("expected") as? String
+        val requestedLocation = locationChange?.get("requested") as? String
         val expectedColorValue = (expectedColor?.get("color") as? Number)?.toInt()
         val expectedColorKey = (expectedColor?.get("colorKey") as? Number)?.toInt()
         val requestedColorValue = (requestedColor?.get("color") as? Number)?.toInt()
@@ -1707,6 +1751,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 (currentMaster.color == expectedColorValue &&
                     currentMaster.colorKey == expectedColorKey)) &&
                 (titleChange == null || currentMaster.title == expectedTitle) &&
+                (locationChange == null || currentMaster.location == expectedLocation) &&
                 (dateRangeChange == null || occurrenceCurrentRange == expectedDateRange) &&
                 (remindersChange == null || currentMaster.reminders == expectedReminders)
         if (!expectedStillMatches) {
@@ -1730,7 +1775,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     dateRangeChange,
                     requestedDateRange,
                     remindersChange,
-                    requestedReminders
+                    requestedReminders,
+                    locationChange,
+                    requestedLocation
                 ),
                 pendingChannelResult
             )
@@ -1755,6 +1802,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             put(Events.ALL_DAY, if (finalRange.allDay) 1 else 0)
             put(Events.STATUS, Events.STATUS_CONFIRMED)
             put(Events.TITLE, requestedTitle ?: currentMaster.title)
+            if (locationChange != null) {
+                if (requestedLocation == null) putNull(Events.EVENT_LOCATION)
+                else put(Events.EVENT_LOCATION, requestedLocation)
+            } else if (currentMaster.location == null) {
+                putNull(Events.EVENT_LOCATION)
+            } else {
+                put(Events.EVENT_LOCATION, currentMaster.location)
+            }
             if (colorChange != null) {
                 if (requestedColorKey == null) {
                     putNull(Events.EVENT_COLOR_KEY)
@@ -1814,6 +1869,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 masterSelectionParts.add("${Events.TITLE} = ?")
                 masterSelectionArgs.add(expectedTitle)
             }
+        }
+        if (locationChange != null) {
+            addNullableSelection(
+                masterSelectionParts,
+                masterSelectionArgs,
+                Events.EVENT_LOCATION,
+                expectedLocation
+            )
         }
         if (dateRangeChange != null) {
             addNullableSelection(
@@ -1930,7 +1993,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     dateRangeChange,
                     requestedDateRange,
                     remindersChange,
-                    requestedReminders
+                    requestedReminders,
+                    locationChange,
+                    requestedLocation
                 ),
                 pendingChannelResult
             )
@@ -1962,7 +2027,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 requestedTitle,
                 requestedDateRange,
                 requestedReminders,
-                resultingEventId = insertedEventId.toString()
+                resultingEventId = insertedEventId.toString(),
+                location = if (locationChange != null) {
+                    requestedLocation
+                } else {
+                    currentMaster.location
+                }
             ),
             pendingChannelResult
         )
@@ -1976,7 +2046,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         title: String?,
         dateRange: EventDateRangeValue?,
         reminders: List<EventReminderValue>? = null,
-        resultingEventId: String? = null
+        resultingEventId: String? = null,
+        location: String? = null
     ): Map<String, Any?> {
         return mapOf(
             "outcome" to outcome,
@@ -1985,6 +2056,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             "currentValues" to mapOf(
                 "color" to mapOf("color" to color, "colorKey" to colorKey),
                 "title" to title,
+                "location" to location,
                 "dateRange" to dateRange?.toMap(),
                 "reminders" to reminders?.map(EventReminderValue::toMap)
             )
@@ -1996,6 +2068,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val color: Int?,
         val colorKey: Int?,
         val title: String?,
+        val location: String?,
         val rawStartDate: Long?,
         val rawEndDate: Long?,
         val duration: String?,
@@ -2033,6 +2106,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 Events.EVENT_COLOR,
                 Events.EVENT_COLOR_KEY,
                 Events.TITLE,
+                Events.EVENT_LOCATION,
                 Events.DTSTART,
                 Events.DTEND,
                 Events.DURATION,
@@ -2052,13 +2126,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 color = if (it.isNull(1) || it.getInt(1) == 0) null else it.getInt(1),
                 colorKey = if (it.isNull(2) || it.getInt(2) == 0) null else it.getInt(2),
                 title = if (it.isNull(3)) null else it.getString(3),
-                rawStartDate = if (it.isNull(4)) null else it.getLong(4),
-                rawEndDate = if (it.isNull(5)) null else it.getLong(5),
-                duration = if (it.isNull(6)) null else it.getString(6),
-                rawStartTimeZone = if (it.isNull(7)) null else it.getString(7),
-                rawEndTimeZone = if (it.isNull(8)) null else it.getString(8),
-                allDay = it.getInt(9) == 1,
-                recurrenceRule = if (it.isNull(10)) null else it.getString(10),
+                location = if (it.isNull(4)) null else it.getString(4),
+                rawStartDate = if (it.isNull(5)) null else it.getLong(5),
+                rawEndDate = if (it.isNull(6)) null else it.getLong(6),
+                duration = if (it.isNull(7)) null else it.getString(7),
+                rawStartTimeZone = if (it.isNull(8)) null else it.getString(8),
+                rawEndTimeZone = if (it.isNull(9)) null else it.getString(9),
+                allDay = it.getInt(10) == 1,
+                recurrenceRule = if (it.isNull(11)) null else it.getString(11),
                 reminders = retrieveReminders(eventId, contentResolver)
                     .map { reminder ->
                         EventReminderValue(reminder.minutes, reminder.method)
@@ -2094,7 +2169,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         dateRangeChange: Map<*, *>?,
         requestedDateRange: EventDateRangeValue?,
         remindersChange: Map<*, *>? = null,
-        requestedReminders: List<EventReminderValue>? = null
+        requestedReminders: List<EventReminderValue>? = null,
+        locationChange: Map<*, *>? = null,
+        requestedLocation: String? = null
     ): Map<String, Any?> {
         val conflictingFields = mutableListOf<String>()
         if (colorChange != null &&
@@ -2110,6 +2187,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (remindersChange != null && current.reminders != requestedReminders) {
             conflictingFields.add("reminders")
         }
+        if (locationChange != null && current.location != requestedLocation) {
+            conflictingFields.add("location")
+        }
         return eventChangeResult(
             if (conflictingFields.isEmpty()) "alreadyCurrent" else "conflict",
             conflictingFields,
@@ -2117,7 +2197,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             current.colorKey,
             current.title,
             current.dateRange,
-            current.reminders
+            current.reminders,
+            location = current.location
         )
     }
 
