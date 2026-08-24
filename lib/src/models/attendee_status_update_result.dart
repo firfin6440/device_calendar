@@ -15,9 +15,11 @@ enum AttendeeStatusUpdateOutcome {
 class AttendeeStatusUpdateResult {
   final AttendeeStatusUpdateOutcome outcome;
   final AndroidAttendanceStatus currentStatus;
+  final String? resultingEventId;
 
   const AttendeeStatusUpdateResult({
     required this.outcome,
     required this.currentStatus,
+    this.resultingEventId,
   });
 }

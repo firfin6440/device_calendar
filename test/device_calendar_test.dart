@@ -147,6 +147,7 @@ void main() {
       return <String, Object>{
         'outcome': 'updated',
         'currentStatus': AndroidAttendanceStatus.Accepted.index,
+        'resultingEventId': 'new-occurrence-id',
       };
     });
 
@@ -164,6 +165,7 @@ void main() {
       result.data?.currentStatus,
       AndroidAttendanceStatus.Accepted,
     );
+    expect(result.data?.resultingEventId, 'new-occurrence-id');
     expect(log, <Matcher>[
       isMethodCall(
         'updateAttendeeStatus',
@@ -173,6 +175,53 @@ void main() {
           'attendeeEmail': 'user@example.com',
           'expectedAttendeeStatus': AndroidAttendanceStatus.Invited.index,
           'newAttendeeStatus': AndroidAttendanceStatus.Accepted.index,
+        },
+      ),
+    ]);
+  });
+
+  test('UpdateAttendeeStatus_SendsRecurringChangeTarget', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      log.add(methodCall);
+      return <String, Object>{
+        'outcome': 'updated',
+        'currentStatus': AndroidAttendanceStatus.Declined.index,
+        'resultingEventId': 'future-series-id',
+      };
+    });
+
+    final result = await deviceCalendarPlugin.updateAttendeeStatus(
+      calendarId: 'calendarId',
+      eventId: 'selectedEventId',
+      attendeeEmail: 'user@example.com',
+      expectedStatus: AndroidAttendanceStatus.Accepted,
+      newStatus: AndroidAttendanceStatus.Declined,
+      recurrenceTarget: const EventRecurrenceChangeTarget(
+        scope: EventRecurrenceChangeScope.thisAndFollowing,
+        originalOccurrenceStartMillisecondsSinceEpoch: 123456789,
+        originalEventId: 'masterEventId',
+        selectedOccurrenceWasDetached: true,
+      ),
+    );
+
+    expect(result.isSuccess, true);
+    expect(result.data?.resultingEventId, 'future-series-id');
+    expect(log, <Matcher>[
+      isMethodCall(
+        'updateAttendeeStatus',
+        arguments: <String, dynamic>{
+          'calendarId': 'calendarId',
+          'eventId': 'selectedEventId',
+          'attendeeEmail': 'user@example.com',
+          'expectedAttendeeStatus': AndroidAttendanceStatus.Accepted.index,
+          'newAttendeeStatus': AndroidAttendanceStatus.Declined.index,
+          'recurrenceChangeTarget': <String, Object?>{
+            'scope': 'thisAndFollowing',
+            'originalOccurrenceStart': 123456789,
+            'originalEventId': 'masterEventId',
+            'selectedOccurrenceWasDetached': true,
+          },
         },
       ),
     ]);
@@ -707,6 +756,69 @@ void main() {
         ],
       },
     });
+  });
+
+  test('EventChangeSet_SerializesRecurrenceAndExplicitRemoval', () {
+    final RecurrenceRule weekly = RecurrenceRule(
+      frequency: Frequency.weekly,
+      byWeekDays: <ByWeekDayEntry>[
+        ByWeekDayEntry(DateTime.monday),
+        ByWeekDayEntry(DateTime.friday),
+      ],
+    );
+    final EventChangeSet changes = EventChangeSet(
+      recurrence: EventFieldChange<EventRecurrenceValue>(
+        expected: EventRecurrenceValue(rule: weekly),
+        requested: const EventRecurrenceValue(rule: null),
+      ),
+    );
+
+    expect(changes.isEmpty, false);
+    expect(changes.toJson(), <String, Object?>{
+      'recurrence': <String, Object?>{
+        'expected': <String, Object?>{'rule': weekly.toJson()},
+        'requested': <String, Object?>{'rule': null},
+      },
+    });
+  });
+
+  test('ApplyEventChanges_ReturnsCurrentRecurrenceOnConflict', () async {
+    final RecurrenceRule current = RecurrenceRule(
+      frequency: Frequency.monthly,
+      byMonthDays: const <int>[19],
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      return <String, Object>{
+        'outcome': 'conflict',
+        'conflictingFields': <String>['recurrence'],
+        'currentValues': <String, Object>{
+          'recurrence': <String, Object?>{'rule': current.toJson()},
+        },
+      };
+    });
+
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: EventChangeSet(
+        recurrence: EventFieldChange<EventRecurrenceValue>(
+          expected: EventRecurrenceValue(
+            rule: RecurrenceRule(frequency: Frequency.weekly),
+          ),
+          requested: EventRecurrenceValue(
+            rule: RecurrenceRule(frequency: Frequency.daily),
+          ),
+        ),
+      ),
+    );
+
+    expect(result.data?.outcome, EventChangeOutcome.conflict);
+    expect(
+      result.data?.conflictingFields,
+      <EventChangeField>{EventChangeField.recurrence},
+    );
+    expect(result.data?.currentRecurrence?.rule.toString(), current.toString());
   });
 
   test('ApplyEventChanges_ReturnsCurrentRemindersOnConflict', () async {

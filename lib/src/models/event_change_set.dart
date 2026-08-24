@@ -1,4 +1,5 @@
 import 'package:characters/characters.dart';
+import 'package:rrule/rrule.dart';
 import 'package:timezone/timezone.dart';
 
 class EventFieldChange<T> {
@@ -52,6 +53,50 @@ class EventReminderValue {
   Map<String, Object?> toJson() => <String, Object?>{
         'minutes': minutes,
         'method': method,
+      };
+}
+
+class EventResourceValue {
+  final String? name;
+  final String? email;
+
+  const EventResourceValue({this.name, this.email});
+
+  factory EventResourceValue.fromJson(Map<Object?, Object?> json) =>
+      EventResourceValue(
+        name: json['name'] as String?,
+        email: json['email'] as String?,
+      );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'name': name,
+        'email': email,
+      };
+}
+
+/// A recurrence value carried by an optimistic event change.
+///
+/// The wrapper is intentional: a `null` [rule] means "make this event
+/// non-recurring", while a missing recurrence change means "do not touch the
+/// recurrence".
+class EventRecurrenceValue {
+  final RecurrenceRule? rule;
+
+  const EventRecurrenceValue({required this.rule});
+
+  factory EventRecurrenceValue.fromJson(Map<Object?, Object?> json) {
+    final Object? rawRule = json['rule'];
+    return EventRecurrenceValue(
+      rule: rawRule is Map
+          ? RecurrenceRule.fromJson(
+              Map<String, dynamic>.from(rawRule),
+            )
+          : null,
+    );
+  }
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'rule': rule?.toJson(),
       };
 }
 
@@ -120,6 +165,8 @@ class EventChangeSet {
   final EventFieldChange<String?>? location;
   final EventFieldChange<EventDateRangeValue>? dateRange;
   final EventFieldChange<List<EventReminderValue>>? reminders;
+  final EventFieldChange<List<EventResourceValue>>? resources;
+  final EventFieldChange<EventRecurrenceValue>? recurrence;
   final int titleMaxLength;
 
   const EventChangeSet({
@@ -128,6 +175,8 @@ class EventChangeSet {
     this.location,
     this.dateRange,
     this.reminders,
+    this.resources,
+    this.recurrence,
     this.titleMaxLength = EventTitleConstraints.maxLength,
   }) : assert(titleMaxLength > 0);
 
@@ -136,7 +185,9 @@ class EventChangeSet {
       title == null &&
       location == null &&
       dateRange == null &&
-      reminders == null;
+      reminders == null &&
+      resources == null &&
+      recurrence == null;
 
   bool get hasValidTitleLength {
     final String? requestedTitle = title?.requested;
@@ -188,6 +239,20 @@ class EventChangeSet {
           'requested': reminders!.requested
               .map((EventReminderValue reminder) => reminder.toJson())
               .toList(growable: false),
+        },
+      if (resources != null)
+        'resources': <String, Object?>{
+          'expected': resources!.expected
+              .map((EventResourceValue resource) => resource.toJson())
+              .toList(growable: false),
+          'requested': resources!.requested
+              .map((EventResourceValue resource) => resource.toJson())
+              .toList(growable: false),
+        },
+      if (recurrence != null)
+        'recurrence': <String, Object?>{
+          'expected': recurrence!.expected.toJson(),
+          'requested': recurrence!.requested.toJson(),
         },
     };
   }

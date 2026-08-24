@@ -170,6 +170,7 @@ class DeviceCalendarPlugin {
     required String? attendeeEmail,
     required AndroidAttendanceStatus? expectedStatus,
     required AndroidAttendanceStatus? newStatus,
+    EventRecurrenceChangeTarget? recurrenceTarget,
   }) async {
     return _invokeChannelMethod(
       ChannelConstants.methodNameUpdateAttendeeStatus,
@@ -192,6 +193,9 @@ class DeviceCalendarPlugin {
         ChannelConstants.parameterNameExpectedAttendeeStatus:
             expectedStatus?.index,
         ChannelConstants.parameterNameNewAttendeeStatus: newStatus?.index,
+        if (recurrenceTarget != null)
+          ChannelConstants.parameterNameRecurrenceChangeTarget:
+              recurrenceTarget.toJson(),
       },
       evaluateResponse: (rawData) {
         final Map<Object?, Object?> response =
@@ -225,6 +229,7 @@ class DeviceCalendarPlugin {
         return AttendeeStatusUpdateResult(
           outcome: outcome,
           currentStatus: AndroidAttendanceStatus.values[currentStatusIndex],
+          resultingEventId: response['resultingEventId']?.toString(),
         );
       },
     );
@@ -309,6 +314,10 @@ class DeviceCalendarPlugin {
               return EventChangeField.dateRange;
             case 'reminders':
               return EventChangeField.reminders;
+            case 'resources':
+              return EventChangeField.resources;
+            case 'recurrence':
+              return EventChangeField.recurrence;
             default:
               throw FormatException('Unknown conflicting field: $field');
           }
@@ -320,6 +329,8 @@ class DeviceCalendarPlugin {
         final Object? rawCurrentLocation = currentValues['location'];
         final Object? rawCurrentDateRange = currentValues['dateRange'];
         final Object? rawCurrentReminders = currentValues['reminders'];
+        final Object? rawCurrentResources = currentValues['resources'];
+        final Object? rawCurrentRecurrence = currentValues['recurrence'];
         final Object? rawResultingEventId = response['resultingEventId'];
 
         return EventChangeResult(
@@ -344,6 +355,18 @@ class DeviceCalendarPlugin {
                         Map<Object?, Object?>.from(reminder as Map),
                       ))
                   .toList(growable: false)
+              : null,
+          currentResources: rawCurrentResources is List
+              ? rawCurrentResources
+                  .map((Object? resource) => EventResourceValue.fromJson(
+                        Map<Object?, Object?>.from(resource as Map),
+                      ))
+                  .toList(growable: false)
+              : null,
+          currentRecurrence: rawCurrentRecurrence is Map
+              ? EventRecurrenceValue.fromJson(
+                  Map<Object?, Object?>.from(rawCurrentRecurrence),
+                )
               : null,
           resultingEventId: rawResultingEventId?.toString(),
         );

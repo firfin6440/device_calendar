@@ -12,6 +12,8 @@ enum EventChangeField {
   location,
   dateRange,
   reminders,
+  resources,
+  recurrence,
 }
 
 class EventChangeResult {
@@ -22,6 +24,8 @@ class EventChangeResult {
   final String? currentLocation;
   final EventDateRangeValue? currentDateRange;
   final List<EventReminderValue>? currentReminders;
+  final List<EventResourceValue>? currentResources;
+  final EventRecurrenceValue? currentRecurrence;
   final String? resultingEventId;
 
   const EventChangeResult({
@@ -32,6 +36,8 @@ class EventChangeResult {
     this.currentLocation,
     this.currentDateRange,
     this.currentReminders,
+    this.currentResources,
+    this.currentRecurrence,
     this.resultingEventId,
   });
 }

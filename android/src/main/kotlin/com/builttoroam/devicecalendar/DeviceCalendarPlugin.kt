@@ -211,12 +211,15 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
                 val attendeeEmail = call.argument<String>(ATTENDEE_EMAIL_ARGUMENT)
                 val expectedStatus = call.argument<Int>(EXPECTED_ATTENDEE_STATUS_ARGUMENT)
                 val newStatus = call.argument<Int>(NEW_ATTENDEE_STATUS_ARGUMENT)
+                val recurrenceChangeTarget =
+                    call.argument<Map<String, Any?>>(RECURRENCE_CHANGE_TARGET_ARGUMENT)
                 _calendarDelegate.updateAttendeeStatus(
                     calendarId!!,
                     eventId!!,
                     attendeeEmail!!,
                     expectedStatus!!,
                     newStatus!!,
+                    recurrenceChangeTarget,
                     result
                 )
             }
