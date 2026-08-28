@@ -12,6 +12,17 @@ class Constants {
         const val CALENDAR_PROJECTION_ACCESS_LEVEL_INDEX: Int = 5
         const val CALENDAR_PROJECTION_COLOR_INDEX: Int = 6
         const val CALENDAR_PROJECTION_IS_PRIMARY_INDEX: Int = 7
+        const val CALENDAR_PROJECTION_MAX_REMINDERS_INDEX: Int = 8
+        const val CALENDAR_PROJECTION_ALLOWED_REMINDERS_INDEX: Int = 9
+        const val CALENDAR_PROJECTION_ALLOWED_AVAILABILITY_INDEX: Int = 10
+        const val CALENDAR_PROJECTION_ALLOWED_ATTENDEE_TYPES_INDEX: Int = 11
+        const val CALENDAR_PROJECTION_CAN_MODIFY_TIME_ZONE_INDEX: Int = 12
+        const val CALENDAR_PROJECTION_CAN_ORGANIZER_RESPOND_INDEX: Int = 13
+        const val CALENDAR_PROJECTION_VISIBLE_INDEX: Int = 14
+        const val CALENDAR_PROJECTION_SYNC_EVENTS_INDEX: Int = 15
+        const val CALENDAR_PROJECTION_TIME_ZONE_INDEX: Int = 16
+        const val CALENDAR_PROJECTION_LOCATION_INDEX: Int = 17
+        const val CALENDAR_PROJECTION_COLOR_KEY_INDEX: Int = 18
 
         // API 17 or higher
         val CALENDAR_PROJECTION: Array<String> = arrayOf(
@@ -22,7 +33,18 @@ class Constants {
             CalendarContract.Calendars.OWNER_ACCOUNT,                 // 4
             CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,         // 5
             CalendarContract.Calendars.CALENDAR_COLOR,                // 6
-            CalendarContract.Calendars.IS_PRIMARY                     // 7
+            CalendarContract.Calendars.IS_PRIMARY,                    // 7
+            CalendarContract.Calendars.MAX_REMINDERS,                 // 8
+            CalendarContract.Calendars.ALLOWED_REMINDERS,             // 9
+            CalendarContract.Calendars.ALLOWED_AVAILABILITY,          // 10
+            CalendarContract.Calendars.ALLOWED_ATTENDEE_TYPES,        // 11
+            CalendarContract.Calendars.CAN_MODIFY_TIME_ZONE,          // 12
+            CalendarContract.Calendars.CAN_ORGANIZER_RESPOND,         // 13
+            CalendarContract.Calendars.VISIBLE,                       // 14
+            CalendarContract.Calendars.SYNC_EVENTS,                   // 15
+            CalendarContract.Calendars.CALENDAR_TIME_ZONE,            // 16
+            CalendarContract.Calendars.CALENDAR_LOCATION,             // 17
+            CalendarContract.Calendars.CALENDAR_COLOR_KEY             // 18
 
         )
 
@@ -34,7 +56,18 @@ class Constants {
             CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,         // 3
             CalendarContract.Calendars.OWNER_ACCOUNT,                 // 4
             CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,         // 5
-            CalendarContract.Calendars.CALENDAR_COLOR                 // 6
+            CalendarContract.Calendars.CALENDAR_COLOR,                // 6
+            CalendarContract.Calendars.MAX_REMINDERS,                 // 7
+            CalendarContract.Calendars.ALLOWED_REMINDERS,             // 8
+            CalendarContract.Calendars.ALLOWED_AVAILABILITY,          // 9
+            CalendarContract.Calendars.ALLOWED_ATTENDEE_TYPES,        // 10
+            CalendarContract.Calendars.CAN_MODIFY_TIME_ZONE,          // 11
+            CalendarContract.Calendars.CAN_ORGANIZER_RESPOND,         // 12
+            CalendarContract.Calendars.VISIBLE,                       // 13
+            CalendarContract.Calendars.SYNC_EVENTS,                   // 14
+            CalendarContract.Calendars.CALENDAR_TIME_ZONE,            // 15
+            CalendarContract.Calendars.CALENDAR_LOCATION,             // 16
+            CalendarContract.Calendars.CALENDAR_COLOR_KEY             // 17
         )
 
         const val EVENT_PROJECTION_ID_INDEX: Int = 0

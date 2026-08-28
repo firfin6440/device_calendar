@@ -3493,6 +3493,26 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         )
 
         calendar.isReadOnly = isCalendarReadOnly(accessLevel)
+        calendar.accessLevel = accessLevel
+        calendar.maxReminders = cursor.nullableInt(Cst.CALENDAR_PROJECTION_MAX_REMINDERS_INDEX)
+        calendar.allowedReminderMethods = parseCalendarCapabilityValues(
+            cursor.nullableString(Cst.CALENDAR_PROJECTION_ALLOWED_REMINDERS_INDEX)
+        )
+        calendar.allowedAvailabilities = parseCalendarAvailabilityValues(
+            cursor.nullableString(Cst.CALENDAR_PROJECTION_ALLOWED_AVAILABILITY_INDEX)
+        )
+        calendar.allowedAttendeeTypes = parseCalendarCapabilityValues(
+            cursor.nullableString(Cst.CALENDAR_PROJECTION_ALLOWED_ATTENDEE_TYPES_INDEX)
+        )
+        calendar.canModifyTimeZone =
+            cursor.nullableBoolean(Cst.CALENDAR_PROJECTION_CAN_MODIFY_TIME_ZONE_INDEX)
+        calendar.canOrganizerRespond =
+            cursor.nullableBoolean(Cst.CALENDAR_PROJECTION_CAN_ORGANIZER_RESPOND_INDEX)
+        calendar.isVisible = cursor.nullableBoolean(Cst.CALENDAR_PROJECTION_VISIBLE_INDEX)
+        calendar.isSyncEnabled = cursor.nullableBoolean(Cst.CALENDAR_PROJECTION_SYNC_EVENTS_INDEX)
+        calendar.timeZone = cursor.nullableString(Cst.CALENDAR_PROJECTION_TIME_ZONE_INDEX)
+        calendar.location = cursor.nullableString(Cst.CALENDAR_PROJECTION_LOCATION_INDEX)
+        calendar.colorKey = cursor.nullableString(Cst.CALENDAR_PROJECTION_COLOR_KEY_INDEX)
         if (atLeastAPI(17)) {
             val isPrimary = cursor.getString(Cst.CALENDAR_PROJECTION_IS_PRIMARY_INDEX)
             calendar.isDefault = isPrimary == "1"
@@ -3501,6 +3521,15 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
         return calendar
     }
+
+    private fun Cursor.nullableInt(index: Int): Int? =
+        if (isNull(index)) null else getInt(index)
+
+    private fun Cursor.nullableBoolean(index: Int): Boolean? =
+        nullableInt(index)?.let { it != 0 }
+
+    private fun Cursor.nullableString(index: Int): String? =
+        if (isNull(index)) null else getString(index)
 
     private fun parseEvent(calendarId: String, cursor: Cursor?): Event? {
         if (cursor == null) {

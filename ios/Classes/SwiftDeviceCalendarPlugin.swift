@@ -32,6 +32,23 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
         let color: Int
         let accountName: String
         let accountType: String
+        let ownerAccount: String?
+        let accessLevel: Int?
+        let timeZone: String?
+        let maxReminders: Int?
+        let allowedReminderMethods: [Int]?
+        let allowedAvailabilities: [String]?
+        let allowedAttendeeTypes: [Int]?
+        let canModifyTimeZone: Bool?
+        let canOrganizerRespond: Bool?
+        let isVisible: Bool?
+        let isSyncEnabled: Bool?
+        let location: String?
+        let colorKey: String?
+        let isImmutable: Bool?
+        let isSubscribed: Bool?
+        let platformType: String?
+        let allowedEntityTypes: [String]?
     }
 
     struct Event: Codable {
@@ -347,7 +364,24 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
                     isDefault: defaultCalendar?.calendarIdentifier == ekCalendar.calendarIdentifier,
                     color: UIColor(cgColor: ekCalendar.cgColor).rgb()!,
                     accountName: ekCalendar.source.title,
-                    accountType: getAccountType(ekCalendar.source.sourceType))
+                    accountType: getAccountType(ekCalendar.source.sourceType),
+                    ownerAccount: nil,
+                    accessLevel: nil,
+                    timeZone: nil,
+                    maxReminders: nil,
+                    allowedReminderMethods: nil,
+                    allowedAvailabilities: getSupportedAvailabilities(ekCalendar),
+                    allowedAttendeeTypes: nil,
+                    canModifyTimeZone: nil,
+                    canOrganizerRespond: nil,
+                    isVisible: nil,
+                    isSyncEnabled: nil,
+                    location: nil,
+                    colorKey: nil,
+                    isImmutable: ekCalendar.isImmutable,
+                    isSubscribed: ekCalendar.isSubscribed,
+                    platformType: getCalendarType(ekCalendar.type),
+                    allowedEntityTypes: getAllowedEntityTypes(ekCalendar))
                 calendars.append(calendar)
             }
 
@@ -398,6 +432,53 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
         default:
             return "Unknown";
         }
+    }
+
+    private func getCalendarType(_ calendarType: EKCalendarType) -> String {
+        switch calendarType {
+        case .local:
+            return "local"
+        case .calDAV:
+            return "calDav"
+        case .exchange:
+            return "exchange"
+        case .subscription:
+            return "subscription"
+        case .birthday:
+            return "birthday"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
+    private func getSupportedAvailabilities(_ calendar: EKCalendar) -> [String] {
+        let supported = calendar.supportedEventAvailabilities
+        var values = [String]()
+        if supported.contains(.busy) {
+            values.append("Busy")
+        }
+        if supported.contains(.free) {
+            values.append("Free")
+        }
+        if supported.contains(.tentative) {
+            values.append("Tentative")
+        }
+        if supported.contains(.unavailable) {
+            values.append("Unavailable")
+        }
+        return values
+    }
+
+    private func getAllowedEntityTypes(_ calendar: EKCalendar) -> [String] {
+        let allowed = calendar.allowedEntityTypes
+        var values = [String]()
+        if allowed.contains(.event) {
+            values.append("event")
+        }
+        if allowed.contains(.reminder) {
+            values.append("reminder")
+        }
+        return values
     }
 
     private func retrieveEvents(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
