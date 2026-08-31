@@ -31,3 +31,22 @@ internal fun parseDurationMillis(duration: String?): Long? {
             seconds * DateUtils.SECOND_IN_MILLIS
         )
 }
+
+/**
+ * Instances can briefly expose BEGIN == END while its generated cache catches
+ * up with a recurring master stored as DTSTART + DURATION. Prefer a positive
+ * provider duration in that transient state, but preserve a healthy END.
+ */
+internal fun resolveInstanceEndMillis(
+    start: Long,
+    rawEnd: Long,
+    duration: String?
+): Long {
+    if (rawEnd > start) return rawEnd
+    val durationMillis = parseDurationMillis(duration)
+    return if (durationMillis != null && durationMillis > 0L) {
+        start + durationMillis
+    } else {
+        rawEnd
+    }
+}

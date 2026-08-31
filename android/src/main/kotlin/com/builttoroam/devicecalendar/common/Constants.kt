@@ -75,6 +75,7 @@ class Constants {
         const val EVENT_PROJECTION_DESCRIPTION_INDEX: Int = 2
         const val EVENT_PROJECTION_BEGIN_INDEX: Int = 3
         const val EVENT_PROJECTION_END_INDEX: Int = 4
+        const val EVENT_PROJECTION_DURATION_INDEX: Int = 5
         const val EVENT_PROJECTION_RECURRING_RULE_INDEX: Int = 7
         const val EVENT_PROJECTION_ALL_DAY_INDEX: Int = 8
         const val EVENT_PROJECTION_EVENT_LOCATION_INDEX: Int = 9
@@ -130,6 +131,9 @@ class Constants {
         const val MASTER_EVENT_PROJECTION_EVENT_COLOR_INDEX: Int = 15
         const val MASTER_EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX: Int = 16
         const val MASTER_EVENT_PROJECTION_SYNC_ID_INDEX: Int = 17
+        const val MASTER_EVENT_PROJECTION_ORIGINAL_ID_INDEX: Int = 18
+        const val MASTER_EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX: Int = 19
+        const val MASTER_EVENT_PROJECTION_DIRTY_INDEX: Int = 20
 
         val MASTER_EVENT_PROJECTION: Array<String> = arrayOf(
             CalendarContract.Events._ID,
@@ -149,7 +153,10 @@ class Constants {
             CalendarContract.Events.STATUS,
             CalendarContract.Events.EVENT_COLOR,
             CalendarContract.Events.EVENT_COLOR_KEY,
-            CalendarContract.Events._SYNC_ID
+            CalendarContract.Events._SYNC_ID,
+            CalendarContract.Events.ORIGINAL_ID,
+            CalendarContract.Events.ORIGINAL_INSTANCE_TIME,
+            CalendarContract.Events.DIRTY
         )
 
         const val EVENT_INSTANCE_DELETION_ID_INDEX: Int = 0

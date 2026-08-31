@@ -23,6 +23,7 @@ private const val REQUEST_PERMISSIONS_METHOD = "requestPermissions"
 private const val HAS_PERMISSIONS_METHOD = "hasPermissions"
 private const val RETRIEVE_CALENDARS_METHOD = "retrieveCalendars"
 private const val RETRIEVE_EVENTS_METHOD = "retrieveEvents"
+private const val RETRIEVE_EVENT_METHOD = "retrieveEvent"
 private const val RETRIEVE_MASTER_EVENT_METHOD = "retrieveMasterEvent"
 private const val UPDATE_ATTENDEE_STATUS_METHOD = "updateAttendeeStatus"
 private const val APPLY_EVENT_CHANGES_METHOD = "applyEventChanges"
@@ -199,6 +200,11 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
                 val endDate = call.argument<Long>(END_DATE_ARGUMENT)
                 val eventIds = call.argument<List<String>>(EVENT_IDS_ARGUMENT) ?: listOf()
                 _calendarDelegate.retrieveEvents(calendarId!!, startDate, endDate, eventIds, result)
+            }
+            RETRIEVE_EVENT_METHOD -> {
+                val calendarId = call.argument<String>(CALENDAR_ID_ARGUMENT)
+                val eventId = call.argument<String>(EVENT_ID_ARGUMENT)
+                _calendarDelegate.retrieveEvent(calendarId!!, eventId!!, result)
             }
             RETRIEVE_MASTER_EVENT_METHOD -> {
                 val calendarId = call.argument<String>(CALENDAR_ID_ARGUMENT)

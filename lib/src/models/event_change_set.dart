@@ -74,6 +74,31 @@ class EventResourceValue {
       };
 }
 
+class EventAttendeeValue {
+  final String? name;
+  final String email;
+  final int role;
+
+  const EventAttendeeValue({
+    this.name,
+    required this.email,
+    required this.role,
+  });
+
+  factory EventAttendeeValue.fromJson(Map<Object?, Object?> json) =>
+      EventAttendeeValue(
+        name: json['name'] as String?,
+        email: json['email'] as String,
+        role: json['role'] as int,
+      );
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'name': name,
+        'email': email,
+        'role': role,
+      };
+}
+
 /// A recurrence value carried by an optimistic event change.
 ///
 /// The wrapper is intentional: a `null` [rule] means "make this event
@@ -165,6 +190,7 @@ class EventChangeSet {
   final EventFieldChange<String?>? location;
   final EventFieldChange<EventDateRangeValue>? dateRange;
   final EventFieldChange<List<EventReminderValue>>? reminders;
+  final EventFieldChange<List<EventAttendeeValue>>? attendees;
   final EventFieldChange<List<EventResourceValue>>? resources;
   final EventFieldChange<EventRecurrenceValue>? recurrence;
   final int titleMaxLength;
@@ -175,6 +201,7 @@ class EventChangeSet {
     this.location,
     this.dateRange,
     this.reminders,
+    this.attendees,
     this.resources,
     this.recurrence,
     this.titleMaxLength = EventTitleConstraints.maxLength,
@@ -186,6 +213,7 @@ class EventChangeSet {
       location == null &&
       dateRange == null &&
       reminders == null &&
+      attendees == null &&
       resources == null &&
       recurrence == null;
 
@@ -238,6 +266,15 @@ class EventChangeSet {
               .toList(growable: false),
           'requested': reminders!.requested
               .map((EventReminderValue reminder) => reminder.toJson())
+              .toList(growable: false),
+        },
+      if (attendees != null)
+        'attendees': <String, Object?>{
+          'expected': attendees!.expected
+              .map((EventAttendeeValue attendee) => attendee.toJson())
+              .toList(growable: false),
+          'requested': attendees!.requested
+              .map((EventAttendeeValue attendee) => attendee.toJson())
               .toList(growable: false),
         },
       if (resources != null)

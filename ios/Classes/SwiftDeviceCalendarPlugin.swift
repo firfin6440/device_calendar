@@ -130,6 +130,7 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
     let hasPermissionsMethod = "hasPermissions"
     let retrieveCalendarsMethod = "retrieveCalendars"
     let retrieveEventsMethod = "retrieveEvents"
+    let retrieveEventMethod = "retrieveEvent"
     let retrieveMasterEventMethod = "retrieveMasterEvent"
     let updateAttendeeStatusMethod = "updateAttendeeStatus"
     let applyEventChangesMethod = "applyEventChanges"
@@ -233,6 +234,8 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
         case retrieveEventsMethod:
             retrieveEvents(call, result)
         case retrieveMasterEventMethod:
+            retrieveMasterEvent(call, result)
+        case retrieveEventMethod:
             retrieveMasterEvent(call, result)
         case updateAttendeeStatusMethod:
             result(FlutterError(
@@ -573,6 +576,10 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
             }
 
             guard let ekEvent = self.eventStore.event(withIdentifier: eventId) else {
+                self.finishWithEventNotFoundError(result: result, eventId: eventId)
+                return
+            }
+            guard ekEvent.calendar.calendarIdentifier == calendarId else {
                 self.finishWithEventNotFoundError(result: result, eventId: eventId)
                 return
             }

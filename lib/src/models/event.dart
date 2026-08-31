@@ -15,6 +15,10 @@ class Event {
   /// remote sync source. Null for events that have never been synced.
   String? syncId;
 
+  /// Read-only. Android exclusive. Whether this event contains local changes
+  /// that its calendar sync adapter has not finished processing.
+  bool? isDirty;
+
   /// Read-only. The identifier of the calendar that this event is associated with
   String? calendarId;
 
@@ -84,6 +88,7 @@ class Event {
     this.calendarId, {
     this.eventId,
     this.syncId,
+    this.isDirty,
     this.title,
     this.start,
     this.end,
@@ -135,6 +140,7 @@ class Event {
 
     eventId = json['eventId'];
     syncId = json['syncId'];
+    isDirty = json['eventIsDirty'];
     calendarId = json['calendarId'];
     isDetached = json['eventIsDetached'] ?? false;
     originalEventId = json['originalEventId'];
@@ -272,6 +278,7 @@ class Event {
     data['calendarId'] = calendarId;
     data['eventId'] = eventId;
     data['syncId'] = syncId;
+    data['eventIsDirty'] = isDirty;
     data['eventIsDetached'] = isDetached;
     data['eventOriginalStartDate'] = originalStart?.millisecondsSinceEpoch;
     data['originalEventId'] = originalEventId;

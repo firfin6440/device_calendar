@@ -131,6 +131,31 @@ class DeviceCalendarPlugin {
             ));
   }
 
+  /// Retrieves one provider event directly by its stable calendar and event
+  /// identifiers, without depending on a generated Instances row.
+  Future<Result<Event>> retrieveEvent(
+    String? calendarId,
+    String? eventId,
+  ) async {
+    return _invokeChannelMethod(
+      ChannelConstants.methodNameRetrieveEvent,
+      assertParameters: (result) {
+        _validateCalendarIdParameter(result, calendarId);
+        _assertParameter(
+          result,
+          eventId?.isNotEmpty == true,
+          ErrorCodes.invalidArguments,
+          'A valid event ID is required.',
+        );
+      },
+      arguments: () => <String, Object?>{
+        ChannelConstants.parameterNameCalendarId: calendarId,
+        ChannelConstants.parameterNameEventId: eventId,
+      },
+      evaluateResponse: (rawData) => Event.fromJson(json.decode(rawData)),
+    );
+  }
+
   /// Retrieves the master event of a detached recurring-event occurrence.
   ///
   /// Returns an unsuccessful [Result] when [detachedEvent] is not detached or
@@ -314,6 +339,8 @@ class DeviceCalendarPlugin {
               return EventChangeField.dateRange;
             case 'reminders':
               return EventChangeField.reminders;
+            case 'attendees':
+              return EventChangeField.attendees;
             case 'resources':
               return EventChangeField.resources;
             case 'recurrence':
@@ -329,6 +356,7 @@ class DeviceCalendarPlugin {
         final Object? rawCurrentLocation = currentValues['location'];
         final Object? rawCurrentDateRange = currentValues['dateRange'];
         final Object? rawCurrentReminders = currentValues['reminders'];
+        final Object? rawCurrentAttendees = currentValues['attendees'];
         final Object? rawCurrentResources = currentValues['resources'];
         final Object? rawCurrentRecurrence = currentValues['recurrence'];
         final Object? rawResultingEventId = response['resultingEventId'];
@@ -353,6 +381,13 @@ class DeviceCalendarPlugin {
               ? rawCurrentReminders
                   .map((Object? reminder) => EventReminderValue.fromJson(
                         Map<Object?, Object?>.from(reminder as Map),
+                      ))
+                  .toList(growable: false)
+              : null,
+          currentAttendees: rawCurrentAttendees is List
+              ? rawCurrentAttendees
+                  .map((Object? value) => EventAttendeeValue.fromJson(
+                        Map<Object?, Object?>.from(value! as Map),
                       ))
                   .toList(growable: false)
               : null,

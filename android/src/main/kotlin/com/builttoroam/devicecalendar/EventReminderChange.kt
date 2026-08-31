@@ -21,3 +21,27 @@ fun parseEventReminderValues(value: Any?): List<EventReminderValue>? {
     }
     return reminders.sortedWith(compareBy(EventReminderValue::minutes, EventReminderValue::method))
 }
+
+internal data class RecurrenceExceptionReminderPlan(
+    val deleteInherited: Boolean,
+    val remindersToInsert: List<EventReminderValue>
+)
+
+/**
+ * CalendarProvider clones reminder rows from the recurring master when it
+ * creates a single-occurrence exception. Leave those rows untouched unless
+ * reminders were explicitly edited; an edit replaces the cloned set.
+ */
+internal fun recurrenceExceptionReminderPlan(
+    requestedReminders: List<EventReminderValue>?
+): RecurrenceExceptionReminderPlan = if (requestedReminders == null) {
+    RecurrenceExceptionReminderPlan(
+        deleteInherited = false,
+        remindersToInsert = emptyList()
+    )
+} else {
+    RecurrenceExceptionReminderPlan(
+        deleteInherited = true,
+        remindersToInsert = requestedReminders
+    )
+}

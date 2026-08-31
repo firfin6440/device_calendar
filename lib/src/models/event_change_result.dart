@@ -12,6 +12,7 @@ enum EventChangeField {
   location,
   dateRange,
   reminders,
+  attendees,
   resources,
   recurrence,
 }
@@ -24,6 +25,7 @@ class EventChangeResult {
   final String? currentLocation;
   final EventDateRangeValue? currentDateRange;
   final List<EventReminderValue>? currentReminders;
+  final List<EventAttendeeValue>? currentAttendees;
   final List<EventResourceValue>? currentResources;
   final EventRecurrenceValue? currentRecurrence;
   final String? resultingEventId;
@@ -36,6 +38,7 @@ class EventChangeResult {
     this.currentLocation,
     this.currentDateRange,
     this.currentReminders,
+    this.currentAttendees,
     this.currentResources,
     this.currentRecurrence,
     this.resultingEventId,

@@ -26,4 +26,28 @@ class EventDurationParserTest {
         assertNull(parseDurationMillis("3600"))
         assertNull(parseDurationMillis("P1X"))
     }
+
+    @Test
+    fun instanceDurationRepairsATransientZeroLengthGeneratedOccurrence() {
+        assertEquals(
+            7_200_000L,
+            resolveInstanceEndMillis(
+                start = 3_600_000L,
+                rawEnd = 3_600_000L,
+                duration = "P3600S"
+            )
+        )
+    }
+
+    @Test
+    fun instanceEndWinsWhenTheProviderAlreadyGeneratedAHealthyRange() {
+        assertEquals(
+            9_000_000L,
+            resolveInstanceEndMillis(
+                start = 3_600_000L,
+                rawEnd = 9_000_000L,
+                duration = "P3600S"
+            )
+        )
+    }
 }

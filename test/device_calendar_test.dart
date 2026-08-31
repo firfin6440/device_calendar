@@ -140,6 +140,51 @@ void main() {
     expect(result.errors.first.errorCode, ErrorCodes.invalidArguments);
   });
 
+  test('RetrieveEvent_Returns_Event_Directly_By_Id', () async {
+    final event = Event(
+      'fakeCalendarId',
+      eventId: 'eventId',
+      title: 'Direct event',
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      log.add(methodCall);
+      return jsonEncode(event.toJson());
+    });
+
+    final result = await deviceCalendarPlugin.retrieveEvent(
+      'fakeCalendarId',
+      'eventId',
+    );
+
+    expect(result.isSuccess, true);
+    expect(result.data?.title, 'Direct event');
+    expect(log, <Matcher>[
+      isMethodCall(
+        'retrieveEvent',
+        arguments: <String, dynamic>{
+          'calendarId': 'fakeCalendarId',
+          'eventId': 'eventId',
+        },
+      ),
+    ]);
+  });
+
+  test('RetrieveEvent_Requires_Both_Identifiers', () async {
+    final missingCalendar =
+        await deviceCalendarPlugin.retrieveEvent(null, 'eventId');
+    final missingEvent =
+        await deviceCalendarPlugin.retrieveEvent('calendarId', null);
+
+    expect(missingCalendar.isSuccess, false);
+    expect(missingEvent.isSuccess, false);
+    expect(
+      missingCalendar.errors.first.errorCode,
+      ErrorCodes.invalidArguments,
+    );
+    expect(missingEvent.errors.first.errorCode, ErrorCodes.invalidArguments);
+  });
+
   test('UpdateAttendeeStatus_Returns_Successfully', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
@@ -859,6 +904,92 @@ void main() {
     expect(result.data?.currentReminders?.last.method, 2);
   });
 
+  test('EventChangeSet_SerializesAttendeesAsOneOptimisticField', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      log.add(methodCall);
+      return <String, Object>{
+        'outcome': 'updated',
+        'conflictingFields': <String>[],
+        'currentValues': <String, Object>{
+          'attendees': <Object>[
+            <String, Object>{
+              'name': 'Bob',
+              'email': 'bob@example.com',
+              'role': 1,
+            },
+          ],
+        },
+      };
+    });
+
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        attendees: EventFieldChange<List<EventAttendeeValue>>(
+          expected: <EventAttendeeValue>[],
+          requested: <EventAttendeeValue>[
+            EventAttendeeValue(
+              name: 'Bob',
+              email: 'bob@example.com',
+              role: 1,
+            ),
+          ],
+        ),
+      ),
+    );
+
+    expect(result.data?.currentAttendees?.single.email, 'bob@example.com');
+    expect(
+      log.single.arguments['eventChanges']['attendees']['requested'],
+      <Object>[
+        <String, Object?>{
+          'name': 'Bob',
+          'email': 'bob@example.com',
+          'role': 1,
+        },
+      ],
+    );
+  });
+
+  test('ApplyEventChanges_ReturnsCurrentAttendeesOnConflict', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      return <String, Object>{
+        'outcome': 'conflict',
+        'conflictingFields': <String>['attendees'],
+        'currentValues': <String, Object>{
+          'attendees': <Object>[
+            <String, Object>{
+              'name': 'Alice',
+              'email': 'alice@example.com',
+              'role': 2,
+            },
+          ],
+        },
+      };
+    });
+
+    final result = await deviceCalendarPlugin.applyEventChanges(
+      calendarId: 'calendarId',
+      eventId: 'eventId',
+      changes: const EventChangeSet(
+        attendees: EventFieldChange<List<EventAttendeeValue>>(
+          expected: <EventAttendeeValue>[],
+          requested: <EventAttendeeValue>[],
+        ),
+      ),
+    );
+
+    expect(
+      result.data?.conflictingFields,
+      <EventChangeField>{EventChangeField.attendees},
+    );
+    expect(result.data?.currentAttendees?.single.name, 'Alice');
+    expect(result.data?.currentAttendees?.single.role, 2);
+  });
+
   test('ApplyEventChanges_RejectsInvalidReminders', () async {
     final result = await deviceCalendarPlugin.applyEventChanges(
       calendarId: 'calendarId',
@@ -1020,6 +1151,7 @@ void main() {
       'calendarId',
       eventId: 'eventId',
       syncId: 'remote-sync-id',
+      isDirty: true,
       title: 'Test Event',
       start: startTime,
       location: 'Seattle, Washington',
@@ -1044,7 +1176,9 @@ void main() {
     expect(newEvent.calendarId, equals(event.calendarId));
     expect(newEvent.eventId, equals(event.eventId));
     expect(newEvent.syncId, equals(event.syncId));
+    expect(newEvent.isDirty, isTrue);
     expect(stringEvent['syncId'], equals('remote-sync-id'));
+    expect(stringEvent['eventIsDirty'], isTrue);
     expect(newEvent.isDetached, isTrue);
     expect(
       newEvent.originalStart!.millisecondsSinceEpoch,
