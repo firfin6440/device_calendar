@@ -20,6 +20,19 @@ class EventSyncIdProjectionTest {
     }
 
     @Test
+    fun eventInstancesDoNotProjectTheProviderPrivateMutatorsColumn() {
+        assertEquals(false, Constants.EVENT_PROJECTION.contains(CalendarContract.Events.MUTATORS))
+    }
+
+    @Test
+    fun eventInstancesProjectTheAuthoritativeSelfAttendeeStatus() {
+        assertEquals(
+            CalendarContract.Events.SELF_ATTENDEE_STATUS,
+            Constants.EVENT_PROJECTION[Constants.EVENT_PROJECTION_SELF_ATTENDEE_STATUS_INDEX]
+        )
+    }
+
+    @Test
     fun masterEventsProjectTheSyncId() {
         assertEquals(
             CalendarContract.Events._SYNC_ID,
@@ -32,6 +45,24 @@ class EventSyncIdProjectionTest {
         assertEquals(
             CalendarContract.Events.DIRTY,
             Constants.MASTER_EVENT_PROJECTION[Constants.MASTER_EVENT_PROJECTION_DIRTY_INDEX]
+        )
+    }
+
+    @Test
+    fun masterEventsProjectTheAuthoritativeSelfAttendeeStatus() {
+        assertEquals(
+            CalendarContract.Events.SELF_ATTENDEE_STATUS,
+            Constants.MASTER_EVENT_PROJECTION[
+                Constants.MASTER_EVENT_PROJECTION_SELF_ATTENDEE_STATUS_INDEX
+            ]
+        )
+    }
+
+    @Test
+    fun masterEventsDoNotProjectTheProviderPrivateMutatorsColumn() {
+        assertEquals(
+            false,
+            Constants.MASTER_EVENT_PROJECTION.contains(CalendarContract.Events.MUTATORS)
         )
     }
 }

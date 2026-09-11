@@ -455,7 +455,11 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     events.add(event)
                 }
                 for (event in events) {
-                    val attendees = retrieveAttendees(calendar, event.eventId!!, contentResolver)
+                    val attendees = attendeesWithAuthoritativeSelfStatus(
+                        retrieveAttendees(calendar, event.eventId!!, contentResolver),
+                        calendar.ownerAccount,
+                        event.selfAttendeeStatus
+                    )
                     event.organizer =
                         attendees.firstOrNull { it.isOrganizer != null && it.isOrganizer }
                     event.attendees = attendees
@@ -568,7 +572,11 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 return
             }
 
-            event.attendees = retrieveAttendees(calendar, eventId, contentResolver)
+            event.attendees = attendeesWithAuthoritativeSelfStatus(
+                retrieveAttendees(calendar, eventId, contentResolver),
+                calendar.ownerAccount,
+                event.selfAttendeeStatus
+            )
             event.organizer = event.attendees.firstOrNull {
                 it.isOrganizer != null && it.isOrganizer
             }
@@ -677,7 +685,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     return
                 }
                 "entireSeries" -> {
-                    updateAttendeeStatusForEvent(
+                    updateAttendeeStatusForEntireSeries(
                         calendarId,
                         masterEventId,
                         attendeeChange,
@@ -722,6 +730,134 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val expectedStatus: Int,
         val newStatus: Int
     )
+
+    /**
+     * Assigns one RSVP status to the recurring master and all of its detached
+     * exceptions without touching any other exception field.
+     *
+     * The selected/master status can already equal [AttendeeStatusChange.newStatus]
+     * while another detached occurrence differs. Such a whole-series command
+     * is not a no-op: the exception attendee rows still have to be updated.
+     */
+    private fun updateAttendeeStatusForEntireSeries(
+        calendarId: String,
+        masterEventId: String,
+        change: AttendeeStatusChange,
+        pendingChannelResult: MethodChannel.Result
+    ) {
+        val resolver = _context?.contentResolver
+        val masterId = masterEventId.toLongOrNull()
+        val calendarIdNumber = calendarId.toLongOrNull()
+        if (resolver == null || masterId == null || calendarIdNumber == null) {
+            finishWithError(
+                EC.INVALID_ARGUMENT,
+                "Invalid calendar or recurring master event",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val currentMasterStatus = queryAttendeeStatus(
+            resolver,
+            masterEventId,
+            change.email
+        )
+        if (currentMasterStatus == null) {
+            finishWithError(
+                EC.NOT_FOUND,
+                "The attendee ${change.email} could not be found for event $masterEventId",
+                pendingChannelResult
+            )
+            return
+        }
+        if (currentMasterStatus != change.expectedStatus &&
+            currentMasterStatus != change.newStatus
+        ) {
+            finishWithSuccess(
+                attendeeStatusResult("conflict", currentMasterStatus, masterEventId),
+                pendingChannelResult
+            )
+            return
+        }
+
+        val eventIds = mutableListOf(masterEventId)
+        val exceptionCursor = resolver.query(
+            Events.CONTENT_URI,
+            arrayOf(Events._ID),
+            "${Events.CALENDAR_ID} = ? AND ${Events.ORIGINAL_ID} = ? AND " +
+                "${Events.DELETED} != 1",
+            arrayOf(calendarId, masterEventId),
+            null
+        )
+        exceptionCursor.use { cursor ->
+            while (cursor?.moveToNext() == true) {
+                val exceptionId = cursor.getLong(0).toString()
+                if (exceptionId !in eventIds) eventIds.add(exceptionId)
+            }
+        }
+
+        val placeholders = eventIds.joinToString(",") { "?" }
+        val attendeeSelection =
+            "(${CalendarContract.Attendees.EVENT_ID} IN ($placeholders)) AND " +
+                "(${CalendarContract.Attendees.ATTENDEE_EMAIL} = ?)"
+        val attendeeSelectionArgs =
+            (eventIds + change.email).toTypedArray()
+        var hasDifferingStatus = false
+        var foundMasterAttendee = false
+        val attendeeCursor = resolver.query(
+            CalendarContract.Attendees.CONTENT_URI,
+            arrayOf(
+                CalendarContract.Attendees.EVENT_ID,
+                CalendarContract.Attendees.ATTENDEE_STATUS
+            ),
+            attendeeSelection,
+            attendeeSelectionArgs,
+            null
+        )
+        attendeeCursor.use { cursor ->
+            while (cursor?.moveToNext() == true) {
+                if (cursor.getLong(0) == masterId) foundMasterAttendee = true
+                if (cursor.getInt(1) != change.newStatus) {
+                    hasDifferingStatus = true
+                }
+            }
+        }
+        if (!foundMasterAttendee) {
+            finishWithError(
+                EC.NOT_FOUND,
+                "The attendee ${change.email} could not be found for event $masterEventId",
+                pendingChannelResult
+            )
+            return
+        }
+
+        val values = ContentValues().apply {
+            put(CalendarContract.Attendees.ATTENDEE_STATUS, change.newStatus)
+        }
+        val updatedRows = resolver.update(
+            CalendarContract.Attendees.CONTENT_URI,
+            values,
+            attendeeSelection,
+            attendeeSelectionArgs
+        )
+        if (updatedRows <= 0) {
+            finishWithError(
+                EC.GENERIC_ERROR,
+                "The recurring RSVP assignment updated no attendee rows",
+                pendingChannelResult
+            )
+            return
+        }
+
+        finishWithSuccess(
+            attendeeStatusResult(
+                if (hasDifferingStatus) "updated" else "alreadyCurrent",
+                change.newStatus,
+                masterEventId
+            ),
+            pendingChannelResult
+        )
+    }
 
     private fun updateAttendeeStatusForEvent(
         calendarId: String,
@@ -923,7 +1059,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                         originalOccurrenceStart,
                         selectedOccurrenceWasDetached,
                         eventChanges,
-                        pendingChannelResult
+                        pendingChannelResult,
+                        resetDetachedOverrides = recurrenceChangeTarget["resetDetachedOverrides"] == true
                     )
                     traceTestRecProviderState(
                         "SAVE-AFTER scope=$scope",
@@ -975,7 +1112,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         originalOccurrenceStart: Long,
         selectedOccurrenceWasDetached: Boolean,
         eventChanges: Map<String, Any?>,
-        pendingChannelResult: MethodChannel.Result
+        pendingChannelResult: MethodChannel.Result,
+        resetDetachedOverrides: Boolean = false
     ) {
         val currentMaster = queryStoredEventChangeValues(
             _context?.contentResolver,
@@ -1045,11 +1183,38 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     pendingChannelResult
                 )
             } else {
+                val removedExceptionOperations = when (recurrenceExceptionCleanup(
+                    resetDetachedOverrides,
+                    recurrenceChange != null && requestedRecurrence?.rawRule != null
+                )) {
+                    RecurrenceExceptionCleanup.ALL -> recurringExceptionResetOperations(
+                        contentResolver = _context?.contentResolver,
+                        calendarId = calendarId,
+                        masterEventId = masterEventId
+                    )
+                    RecurrenceExceptionCleanup.OUTSIDE_RULE -> recurringExceptionsOutsideRuleOperations(
+                        contentResolver = _context?.contentResolver,
+                        calendarId = calendarId,
+                        masterEventId = masterEventId,
+                        masterStart = masterRange.startDate,
+                        masterTimeZone = masterRange.startTimeZone,
+                        requestedRule = requestedRecurrence!!.rawRule!!
+                    )
+                    RecurrenceExceptionCleanup.NONE -> emptyList()
+                }
+                if (isTestRecTitle(currentMaster.title)) {
+                    Log.i(
+                        TEST_REC_TRACE_TAG,
+                        "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN recurrence-prune\" " +
+                            "source=device_calendar count=${removedExceptionOperations.size}"
+                    )
+                }
                 applyEventChangesToEvent(
                     calendarId,
                     masterEventId,
                     eventChanges,
-                    pendingChannelResult
+                    pendingChannelResult,
+                    preEventOperations = removedExceptionOperations
                 )
             }
             return
@@ -1210,6 +1375,56 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         masterEventId: String
     ): List<ContentProviderOperation> {
         if (contentResolver == null) return emptyList()
+        return recurrenceExceptionIdentities(
+            contentResolver = contentResolver,
+            calendarId = calendarId,
+            masterEventId = masterEventId
+        ).map { identity ->
+            deleteRecurrenceExceptionOperation(calendarId, identity)
+        }
+    }
+
+    /**
+     * Removes detached rows whose original slots no longer exist after a
+     * recurrence-only update. The deletes and RRULE update are submitted in
+     * one provider batch, preventing a successfully shortened master from
+     * leaving an independently visible orphan exception behind.
+     */
+    private fun recurringExceptionsOutsideRuleOperations(
+        contentResolver: ContentResolver?,
+        calendarId: String,
+        masterEventId: String,
+        masterStart: Long,
+        masterTimeZone: String,
+        requestedRule: String
+    ): List<ContentProviderOperation> {
+        if (contentResolver == null) return emptyList()
+        val rule = try {
+            Rrule(requestedRule)
+        } catch (_: InvalidRecurrenceRuleException) {
+            return emptyList()
+        }
+        return recurrenceExceptionIdentities(
+            contentResolver = contentResolver,
+            calendarId = calendarId,
+            masterEventId = masterEventId
+        ).filterNot { identity ->
+            recurrenceRuleContainsOccurrenceStart(
+                rule = rule,
+                masterStart = masterStart,
+                masterTimeZone = masterTimeZone,
+                occurrenceStart = identity.originalInstanceTime
+            )
+        }.map { identity ->
+            deleteRecurrenceExceptionOperation(calendarId, identity)
+        }
+    }
+
+    private fun recurrenceExceptionIdentities(
+        contentResolver: ContentResolver,
+        calendarId: String,
+        masterEventId: String
+    ): List<StoredRecurrenceExceptionIdentity> {
         val resetQuery = recurrenceExceptionResetQuery(
             calendarId = calendarId,
             masterEventId = masterEventId,
@@ -1235,23 +1450,27 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 )
             }
         }
-        return identities.map { identity ->
-            ContentProviderOperation.newDelete(Events.CONTENT_URI)
-                .withSelection(
-                    "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
-                        "${Events.ORIGINAL_ID} = ? AND " +
-                        "${Events.ORIGINAL_INSTANCE_TIME} = ? AND ${Events.DELETED} != 1",
-                    arrayOf(
-                        identity.eventId.toString(),
-                        calendarId,
-                        identity.originalId,
-                        identity.originalInstanceTime.toString()
-                    )
-                )
-                .withExpectedCount(1)
-                .build()
-        }
+        return identities
     }
+
+    private fun deleteRecurrenceExceptionOperation(
+        calendarId: String,
+        identity: StoredRecurrenceExceptionIdentity
+    ): ContentProviderOperation =
+        ContentProviderOperation.newDelete(Events.CONTENT_URI)
+            .withSelection(
+                "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
+                    "${Events.ORIGINAL_ID} = ? AND " +
+                    "${Events.ORIGINAL_INSTANCE_TIME} = ? AND ${Events.DELETED} != 1",
+                arrayOf(
+                    identity.eventId.toString(),
+                    calendarId,
+                    identity.originalId,
+                    identity.originalInstanceTime.toString()
+                )
+            )
+            .withExpectedCount(1)
+            .build()
 
     private data class TestRecProviderRow(
         val id: String,
@@ -1796,12 +2015,28 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             return
         }
 
-        val selectedValues = if (selectedOccurrenceWasDetached) {
-            queryStoredEventChangeValues(resolver, calendarId, selectedEventId)
+        val boundaryExceptionEventId = if (!selectedOccurrenceWasDetached && resolver != null) {
+            queryRecurrenceExceptionEventId(
+                resolver,
+                masterEventId,
+                originalOccurrenceStart
+            )?.toString()
+        } else {
+            null
+        }
+        val splitSourceEventId = recurrenceSplitSourceEventId(
+            masterEventId = masterEventId,
+            selectedEventId = selectedEventId,
+            selectedOccurrenceWasDetached = selectedOccurrenceWasDetached,
+            boundaryExceptionEventId = boundaryExceptionEventId
+        )
+        val splitSourceIsDetached = splitSourceEventId != masterEventId
+        val selectedValues = if (splitSourceIsDetached) {
+            queryStoredEventChangeValues(resolver, calendarId, splitSourceEventId)
         } else {
             currentMaster
         }
-        val selectedRange = if (selectedOccurrenceWasDetached) {
+        val selectedRange = if (splitSourceIsDetached) {
             selectedValues?.dateRange
         } else {
             EventDateRangeValue(
@@ -1821,11 +2056,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             )
             return
         }
-        val attendeeSourceEventId = if (selectedOccurrenceWasDetached) {
-            selectedEventId
-        } else {
-            masterEventId
-        }
+        val attendeeSourceEventId = splitSourceEventId
         val currentAttendeeStatus = attendeeStatusChange?.let {
             queryAttendeeStatus(resolver, attendeeSourceEventId, it.email)
         }
@@ -2029,11 +2260,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             oldRule.until = DateTime(previousOccurrenceStart!!)
         }
 
-        val futureSourceId = if (selectedOccurrenceWasDetached) {
-            selectedEventId.toLongOrNull()
-        } else {
-            masterId
-        }
+        val futureSourceId = splitSourceEventId.toLongOrNull()
         val futureEvent = futureSourceId?.let {
             queryMasterEvent(resolver, calendarId, it)
         }
@@ -2047,10 +2274,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val futureSourceEventId = futureSourceId.toString()
         futureEvent.attendees = retrieveAttendees(calendar, futureSourceEventId, resolver)
         futureEvent.reminders = retrieveReminders(futureSourceEventId, resolver)
-        if (selectedOccurrenceWasDetached && futureEvent.attendees.isEmpty()) {
+        if (splitSourceIsDetached && futureEvent.attendees.isEmpty()) {
             futureEvent.attendees = retrieveAttendees(calendar, masterEventId, resolver)
         }
-        if (selectedOccurrenceWasDetached && futureEvent.reminders.isEmpty()) {
+        if (splitSourceIsDetached && futureEvent.reminders.isEmpty()) {
             futureEvent.reminders = retrieveReminders(masterEventId, resolver)
         }
         val organizerEmail = sourceOwnership.organizer ?: calendar.ownerAccount
@@ -3473,6 +3700,29 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     .build()
             )
         }
+        val attendeePlan = recurrenceExceptionAttendeePlan(
+            hasAttendeeStatusChange = attendeeStatusChange != null,
+            hasAttendeesChange = attendeesChange != null,
+            hasResourcesChange = resourcesChange != null
+        )
+        if (attendeePlan.replaceInheritedRows) {
+            // CONTENT_EXCEPTION_URI inherits the master's attendee rows on
+            // Android/Samsung. Replace that inherited set before inserting
+            // the requested occurrence participants; appending here creates
+            // duplicate owner/guest rows and can leave two conflicting RSVP
+            // values for the current user.
+            operations.add(
+                ContentProviderOperation.newDelete(
+                    CalendarContract.Attendees.CONTENT_URI
+                )
+                    .withSelection(
+                        "${CalendarContract.Attendees.EVENT_ID} = ?",
+                        arrayOf("0")
+                    )
+                    .withSelectionBackReference(0, exceptionInsertIndex)
+                    .build()
+            )
+        }
         occurrenceAttendees.forEach { attendee ->
             operations.add(
                 ContentProviderOperation.newInsert(CalendarContract.Attendees.CONTENT_URI)
@@ -4751,6 +5001,13 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         event.eventTitle = title ?: "New Event"
         event.eventId = eventId.toString()
         event.syncId = syncId
+        event.uid2445 = cursor.nullableString(Cst.EVENT_PROJECTION_UID_2445_INDEX)
+        event.originalSyncId =
+            cursor.nullableString(Cst.EVENT_PROJECTION_ORIGINAL_SYNC_ID_INDEX)
+        event.eventIsDeleted =
+            cursor.nullableBoolean(Cst.EVENT_PROJECTION_DELETED_INDEX)
+        event.selfAttendeeStatus =
+            cursor.nullableInt(Cst.EVENT_PROJECTION_SELF_ATTENDEE_STATUS_INDEX)
         event.calendarId = calendarId
         event.eventIsDetached = originalEventId != null || originalStartDate != null
         event.eventOriginalStartDate = originalStartDate
@@ -4833,6 +5090,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         event.syncId = syncId
         event.eventIsDirty =
             cursor.getInt(Cst.MASTER_EVENT_PROJECTION_DIRTY_INDEX) != 0
+        event.uid2445 =
+            cursor.nullableString(Cst.MASTER_EVENT_PROJECTION_UID_2445_INDEX)
+        event.originalSyncId =
+            cursor.nullableString(Cst.MASTER_EVENT_PROJECTION_ORIGINAL_SYNC_ID_INDEX)
+        event.eventIsDeleted =
+            cursor.nullableBoolean(Cst.MASTER_EVENT_PROJECTION_DELETED_INDEX)
+        event.selfAttendeeStatus =
+            cursor.nullableInt(Cst.MASTER_EVENT_PROJECTION_SELF_ATTENDEE_STATUS_INDEX)
         event.eventIsDetached = originalEventId != null || originalStartDate != null
         event.originalEventId = originalEventId
         event.eventOriginalStartDate = originalStartDate

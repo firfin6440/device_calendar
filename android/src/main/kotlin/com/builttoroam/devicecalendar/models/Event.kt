@@ -1,10 +1,16 @@
 package com.builttoroam.devicecalendar.models
 
 class Event {
+    @Transient
+    var selfAttendeeStatus: Int? = null
     var eventTitle: String? = null
     var eventId: String? = null
     var syncId: String? = null
+    var uid2445: String? = null
+    var originalSyncId: String? = null
     var eventIsDirty: Boolean? = null
+    var eventIsDeleted: Boolean? = null
+    var eventMutators: String? = null
     var calendarId: String? = null
     var eventIsDetached: Boolean = false
     var eventOriginalStartDate: Long? = null

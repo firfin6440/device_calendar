@@ -69,3 +69,78 @@ internal fun attendeesForOwnedEventWrite(
         true
     )
 }
+
+internal data class RecurrenceExceptionAttendeePlan(
+    val replaceInheritedRows: Boolean
+)
+
+/**
+ * Participant rows inserted through CONTENT_EXCEPTION_URI are inherited from
+ * the master by Android. Any occurrence-local participant or RSVP write must
+ * replace that inherited set before inserting its requested rows; appending
+ * would duplicate every attendee and can leave contradictory current-user
+ * statuses on the exception.
+ */
+internal fun recurrenceExceptionAttendeePlan(
+    hasAttendeeStatusChange: Boolean,
+    hasAttendeesChange: Boolean,
+    hasResourcesChange: Boolean
+): RecurrenceExceptionAttendeePlan = RecurrenceExceptionAttendeePlan(
+    replaceInheritedRows = hasAttendeeStatusChange ||
+        hasAttendeesChange || hasResourcesChange
+)
+
+/**
+ * Collapses duplicate rows for the calendar owner only when the Events row
+ * supplies an authoritative SELF_ATTENDEE_STATUS matching one of them.
+ *
+ * Older KeepCal builds appended occurrence attendees after Android had
+ * already inherited the master's rows. That can leave both the inherited and
+ * requested RSVP rows on a detached exception. Row ordering is not evidence,
+ * so this deliberately does not pick the first or last row. If the event-level
+ * status cannot prove which row is current, the contradiction is preserved for
+ * the higher evidence layer to reject.
+ */
+internal fun attendeesWithAuthoritativeSelfStatus(
+    attendees: List<Attendee>,
+    calendarOwnerEmail: String?,
+    authoritativeSelfStatus: Int?
+): MutableList<Attendee> {
+    if (calendarOwnerEmail.isNullOrBlank() || authoritativeSelfStatus == null) {
+        return attendees.toMutableList()
+    }
+
+    val indexedOwnerRows = attendees.withIndex().filter {
+        it.value.emailAddress.equals(calendarOwnerEmail, ignoreCase = true)
+    }
+    if (indexedOwnerRows.size < 2) return attendees.toMutableList()
+
+    val replacements = mutableMapOf<Int, Attendee>()
+    val suppressedIndexes = mutableSetOf<Int>()
+    indexedOwnerRows.groupBy { it.value.role }.values.forEach { roleRows ->
+        if (roleRows.size < 2) return@forEach
+        val authoritative = roleRows.lastOrNull {
+            it.value.attendanceStatus == authoritativeSelfStatus
+        } ?: return@forEach
+        val firstIndex = roleRows.first().index
+        val displayName = authoritative.value.name
+            ?: roleRows.firstNotNullOfOrNull { it.value.name }
+        replacements[firstIndex] = Attendee(
+            authoritative.value.emailAddress,
+            displayName,
+            authoritative.value.role,
+            authoritativeSelfStatus,
+            roleRows.any { it.value.isOrganizer == true },
+            true
+        )
+        roleRows.drop(1).forEach { suppressedIndexes.add(it.index) }
+    }
+
+    return attendees.mapIndexedNotNull { index, attendee ->
+        when {
+            replacements.containsKey(index) -> replacements[index]
+            suppressedIndexes.contains(index) -> null
+            else -> attendee
+        }
+    }.toMutableList()
+}

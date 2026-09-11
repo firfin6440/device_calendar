@@ -11,11 +11,16 @@ class EventRecurrenceChangeTarget {
   final String? originalEventId;
   final bool selectedOccurrenceWasDetached;
 
+  /// Android: atomically flatten detached rows when editing the entire series,
+  /// including field-only edits. Defaults to the existing native behavior.
+  final bool resetDetachedOverrides;
+
   const EventRecurrenceChangeTarget({
     required this.scope,
     required this.originalOccurrenceStartMillisecondsSinceEpoch,
     required this.originalEventId,
     required this.selectedOccurrenceWasDetached,
+    this.resetDetachedOverrides = false,
   });
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -24,5 +29,6 @@ class EventRecurrenceChangeTarget {
             originalOccurrenceStartMillisecondsSinceEpoch,
         'originalEventId': originalEventId,
         'selectedOccurrenceWasDetached': selectedOccurrenceWasDetached,
+        if (resetDetachedOverrides) 'resetDetachedOverrides': true,
       };
 }

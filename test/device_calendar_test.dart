@@ -170,6 +170,25 @@ void main() {
     ]);
   });
 
+  test('RetrieveEvent_Preserves_Platform_NotFound_Evidence', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      throw PlatformException(
+        code: '404',
+        message: 'The event could not be found',
+      );
+    });
+
+    final result = await deviceCalendarPlugin.retrieveEvent(
+      'fakeCalendarId',
+      'missingEventId',
+    );
+
+    expect(result.isSuccess, false);
+    expect(result.errors, hasLength(1));
+    expect(result.errors.single.errorCode, ErrorCodes.notFound);
+  });
+
   test('RetrieveEvent_Requires_Both_Identifiers', () async {
     final missingCalendar =
         await deviceCalendarPlugin.retrieveEvent(null, 'eventId');
@@ -1151,7 +1170,11 @@ void main() {
       'calendarId',
       eventId: 'eventId',
       syncId: 'remote-sync-id',
+      uid2445: 'rfc-event-uid',
+      originalSyncId: 'remote-original-sync-id',
       isDirty: true,
+      isDeleted: true,
+      mutators: 'calendar.sync.adapter',
       title: 'Test Event',
       start: startTime,
       location: 'Seattle, Washington',
@@ -1176,9 +1199,20 @@ void main() {
     expect(newEvent.calendarId, equals(event.calendarId));
     expect(newEvent.eventId, equals(event.eventId));
     expect(newEvent.syncId, equals(event.syncId));
+    expect(newEvent.uid2445, equals(event.uid2445));
+    expect(newEvent.originalSyncId, equals(event.originalSyncId));
     expect(newEvent.isDirty, isTrue);
+    expect(newEvent.isDeleted, isTrue);
+    expect(newEvent.mutators, equals(event.mutators));
     expect(stringEvent['syncId'], equals('remote-sync-id'));
+    expect(stringEvent['uid2445'], equals('rfc-event-uid'));
+    expect(
+      stringEvent['originalSyncId'],
+      equals('remote-original-sync-id'),
+    );
     expect(stringEvent['eventIsDirty'], isTrue);
+    expect(stringEvent['eventIsDeleted'], isTrue);
+    expect(stringEvent['eventMutators'], equals('calendar.sync.adapter'));
     expect(newEvent.isDetached, isTrue);
     expect(
       newEvent.originalStart!.millisecondsSinceEpoch,

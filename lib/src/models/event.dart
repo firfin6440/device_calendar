@@ -15,9 +15,25 @@ class Event {
   /// remote sync source. Null for events that have never been synced.
   String? syncId;
 
+  /// Read-only. Android exclusive. RFC 5545 UID exposed by the provider when
+  /// its sync adapter supplies one.
+  String? uid2445;
+
+  /// Read-only. Android exclusive. Stable sync identity of the original
+  /// recurring series when the provider supplies one for an exception.
+  String? originalSyncId;
+
   /// Read-only. Android exclusive. Whether this event contains local changes
   /// that its calendar sync adapter has not finished processing.
   bool? isDirty;
+
+  /// Read-only. Android exclusive. Whether this Events row is a provider
+  /// tombstone awaiting removal by its sync adapter.
+  bool? isDeleted;
+
+  /// Read-only. Android exclusive. Package(s) that last mutated this row,
+  /// when exposed by the provider.
+  String? mutators;
 
   /// Read-only. The identifier of the calendar that this event is associated with
   String? calendarId;
@@ -88,7 +104,11 @@ class Event {
     this.calendarId, {
     this.eventId,
     this.syncId,
+    this.uid2445,
+    this.originalSyncId,
     this.isDirty,
+    this.isDeleted,
+    this.mutators,
     this.title,
     this.start,
     this.end,
@@ -140,7 +160,11 @@ class Event {
 
     eventId = json['eventId'];
     syncId = json['syncId'];
+    uid2445 = json['uid2445'];
+    originalSyncId = json['originalSyncId'];
     isDirty = json['eventIsDirty'];
+    isDeleted = json['eventIsDeleted'];
+    mutators = json['eventMutators'];
     calendarId = json['calendarId'];
     isDetached = json['eventIsDetached'] ?? false;
     originalEventId = json['originalEventId'];
@@ -278,7 +302,11 @@ class Event {
     data['calendarId'] = calendarId;
     data['eventId'] = eventId;
     data['syncId'] = syncId;
+    data['uid2445'] = uid2445;
+    data['originalSyncId'] = originalSyncId;
     data['eventIsDirty'] = isDirty;
+    data['eventIsDeleted'] = isDeleted;
+    data['eventMutators'] = mutators;
     data['eventIsDetached'] = isDetached;
     data['eventOriginalStartDate'] = originalStart?.millisecondsSinceEpoch;
     data['originalEventId'] = originalEventId;

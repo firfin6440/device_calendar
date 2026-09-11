@@ -2,6 +2,8 @@ package com.builttoroam.devicecalendar
 
 import org.dmfs.rfc5545.recur.RecurrenceRule
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.ZonedDateTime
 
@@ -48,6 +50,54 @@ class RecurrenceSeriesSplitTest {
                 .toInstant()
                 .toEpochMilli(),
             position.previousOccurrenceStart
+        )
+    }
+
+    @Test
+    fun recurrenceReductionDropsOnlySlotsOutsideTheNewCount() {
+        val monday = ZonedDateTime.parse("2026-09-07T19:45:00+01:00[Europe/London]")
+        val tuesday = monday.plusDays(1)
+        val wednesday = monday.plusDays(2)
+        val reducedRule = RecurrenceRule("FREQ=DAILY;COUNT=2")
+
+        assertTrue(
+            recurrenceRuleContainsOccurrenceStart(
+                reducedRule,
+                monday.toInstant().toEpochMilli(),
+                "Europe/London",
+                monday.toInstant().toEpochMilli()
+            )
+        )
+        assertTrue(
+            recurrenceRuleContainsOccurrenceStart(
+                reducedRule,
+                monday.toInstant().toEpochMilli(),
+                "Europe/London",
+                tuesday.toInstant().toEpochMilli()
+            )
+        )
+        assertFalse(
+            recurrenceRuleContainsOccurrenceStart(
+                reducedRule,
+                monday.toInstant().toEpochMilli(),
+                "Europe/London",
+                wednesday.toInstant().toEpochMilli()
+            )
+        )
+    }
+
+    @Test
+    fun recurrenceMembershipUsesOriginalWallClockSlotsAcrossDst() {
+        val first = ZonedDateTime.parse("2026-10-18T09:00:00+01:00[Europe/London]")
+        val third = ZonedDateTime.parse("2026-11-01T09:00:00Z[Europe/London]")
+
+        assertTrue(
+            recurrenceRuleContainsOccurrenceStart(
+                RecurrenceRule("FREQ=WEEKLY;COUNT=3;BYDAY=SU"),
+                first.toInstant().toEpochMilli(),
+                "Europe/London",
+                third.toInstant().toEpochMilli()
+            )
         )
     }
 }

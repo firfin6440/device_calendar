@@ -10,6 +10,26 @@ import org.junit.Test
 
 class RecurrenceStorageChangesTest {
     @Test
+    fun explicitFieldOnlyResetRemovesAllExceptions() {
+        assertEquals(RecurrenceExceptionCleanup.ALL, recurrenceExceptionCleanup(true, false))
+    }
+
+    @Test
+    fun explicitResetTakesPrecedenceOverRecurrencePruning() {
+        assertEquals(RecurrenceExceptionCleanup.ALL, recurrenceExceptionCleanup(true, true))
+    }
+
+    @Test
+    fun fieldEditWithoutResetDoesNotRemoveExceptions() {
+        assertEquals(RecurrenceExceptionCleanup.NONE, recurrenceExceptionCleanup(false, false))
+    }
+
+    @Test
+    fun recurrenceEditWithoutResetStillPrunesOnlyOutsideRule() {
+        assertEquals(RecurrenceExceptionCleanup.OUTSIDE_RULE, recurrenceExceptionCleanup(false, true))
+    }
+
+    @Test
     fun removingRecurrenceFromSeriesRequiresDeleteAndReplacement() {
         assertTrue(
             shouldReplaceRecurringSeries(
@@ -122,6 +142,45 @@ class RecurrenceStorageChangesTest {
         assertEquals(
             Attendees.RELATIONSHIP_ATTENDEE,
             recurrenceSplitAttendeeRelationship(guest)
+        )
+    }
+
+    @Test
+    fun splitUsesBoundaryExceptionWhenSelectionStillReferencesGeneratedOccurrence() {
+        assertEquals(
+            "20634",
+            recurrenceSplitSourceEventId(
+                masterEventId = "20633",
+                selectedEventId = "20633",
+                selectedOccurrenceWasDetached = false,
+                boundaryExceptionEventId = "20634"
+            )
+        )
+    }
+
+    @Test
+    fun splitKeepsExplicitDetachedSelectionAsItsSource() {
+        assertEquals(
+            "20635",
+            recurrenceSplitSourceEventId(
+                masterEventId = "20633",
+                selectedEventId = "20635",
+                selectedOccurrenceWasDetached = true,
+                boundaryExceptionEventId = "20634"
+            )
+        )
+    }
+
+    @Test
+    fun splitUsesMasterWhenBoundaryHasNoMaterialisedException() {
+        assertEquals(
+            "20633",
+            recurrenceSplitSourceEventId(
+                masterEventId = "20633",
+                selectedEventId = "20633",
+                selectedOccurrenceWasDetached = false,
+                boundaryExceptionEventId = null
+            )
         )
     }
 }

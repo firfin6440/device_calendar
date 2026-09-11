@@ -73,6 +73,18 @@ internal fun recurringEventDateStorageChanges(
 internal fun recurrenceSplitAttendees(attendees: List<Attendee>): List<Attendee> =
     attendees.toList()
 
+internal enum class RecurrenceExceptionCleanup { NONE, OUTSIDE_RULE, ALL }
+
+/** Select cleanup for a non-date entire-series update, in its provider batch. */
+internal fun recurrenceExceptionCleanup(
+    resetDetachedOverrides: Boolean,
+    recurrenceWasChanged: Boolean
+): RecurrenceExceptionCleanup = when {
+    resetDetachedOverrides -> RecurrenceExceptionCleanup.ALL
+    recurrenceWasChanged -> RecurrenceExceptionCleanup.OUTSIDE_RULE
+    else -> RecurrenceExceptionCleanup.NONE
+}
+
 internal fun recurrenceSplitOwnershipValues(organizerEmail: String?): Map<String, Any> =
     buildMap {
         put(Events.HAS_ATTENDEE_DATA, 1)
@@ -85,3 +97,23 @@ internal fun recurrenceSplitAttendeeRelationship(attendee: Attendee): Int =
     } else {
         Attendees.RELATIONSHIP_ATTENDEE
     }
+
+/**
+ * Chooses the provider row that must seed the future half of a recurring
+ * series split.
+ *
+ * The caller can still hold the generated master occurrence while Android
+ * has already materialised an exception for the same boundary occurrence.
+ * In that race, the exception is the authoritative current state and must be
+ * copied before the split removes it.
+ */
+internal fun recurrenceSplitSourceEventId(
+    masterEventId: String,
+    selectedEventId: String,
+    selectedOccurrenceWasDetached: Boolean,
+    boundaryExceptionEventId: String?
+): String = when {
+    selectedOccurrenceWasDetached -> selectedEventId
+    !boundaryExceptionEventId.isNullOrBlank() -> boundaryExceptionEventId
+    else -> masterEventId
+}

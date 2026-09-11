@@ -89,6 +89,10 @@ class Constants {
         const val EVENT_PROJECTION_ORIGINAL_ID_INDEX: Int = 17
         const val EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX: Int = 18
         const val EVENT_PROJECTION_SYNC_ID_INDEX: Int = 19
+        const val EVENT_PROJECTION_UID_2445_INDEX: Int = 20
+        const val EVENT_PROJECTION_ORIGINAL_SYNC_ID_INDEX: Int = 21
+        const val EVENT_PROJECTION_DELETED_INDEX: Int = 22
+        const val EVENT_PROJECTION_SELF_ATTENDEE_STATUS_INDEX: Int = 23
 
         val EVENT_PROJECTION: Array<String> = arrayOf(
                 CalendarContract.Instances.EVENT_ID,
@@ -110,7 +114,11 @@ class Constants {
                 CalendarContract.Events.EVENT_COLOR_KEY,
                 CalendarContract.Events.ORIGINAL_ID,
                 CalendarContract.Events.ORIGINAL_INSTANCE_TIME,
-                CalendarContract.Events._SYNC_ID
+                CalendarContract.Events._SYNC_ID,
+                CalendarContract.Events.UID_2445,
+                CalendarContract.Events.ORIGINAL_SYNC_ID,
+                CalendarContract.Events.DELETED,
+                CalendarContract.Events.SELF_ATTENDEE_STATUS
         )
 
         const val MASTER_EVENT_PROJECTION_ID_INDEX: Int = 0
@@ -134,6 +142,10 @@ class Constants {
         const val MASTER_EVENT_PROJECTION_ORIGINAL_ID_INDEX: Int = 18
         const val MASTER_EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX: Int = 19
         const val MASTER_EVENT_PROJECTION_DIRTY_INDEX: Int = 20
+        const val MASTER_EVENT_PROJECTION_UID_2445_INDEX: Int = 21
+        const val MASTER_EVENT_PROJECTION_ORIGINAL_SYNC_ID_INDEX: Int = 22
+        const val MASTER_EVENT_PROJECTION_DELETED_INDEX: Int = 23
+        const val MASTER_EVENT_PROJECTION_SELF_ATTENDEE_STATUS_INDEX: Int = 24
 
         val MASTER_EVENT_PROJECTION: Array<String> = arrayOf(
             CalendarContract.Events._ID,
@@ -156,7 +168,11 @@ class Constants {
             CalendarContract.Events._SYNC_ID,
             CalendarContract.Events.ORIGINAL_ID,
             CalendarContract.Events.ORIGINAL_INSTANCE_TIME,
-            CalendarContract.Events.DIRTY
+            CalendarContract.Events.DIRTY,
+            CalendarContract.Events.UID_2445,
+            CalendarContract.Events.ORIGINAL_SYNC_ID,
+            CalendarContract.Events.DELETED,
+            CalendarContract.Events.SELF_ATTENDEE_STATUS
         )
 
         const val EVENT_INSTANCE_DELETION_ID_INDEX: Int = 0

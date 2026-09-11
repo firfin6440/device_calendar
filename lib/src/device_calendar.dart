@@ -733,11 +733,12 @@ class DeviceCalendarPlugin {
       if (e is ArgumentError) {
         debugPrint(
             "INVOKE_CHANNEL_METHOD_ERROR! Name: ${e.name}, InvalidValue: ${e.invalidValue}, Message: ${e.message}, ${e.toString()}");
-      } else if (e is PlatformException) {
-        debugPrint('INVOKE_CHANNEL_METHOD_ERROR: $e\n$s');
-      } else {
-        _parsePlatformExceptionAndUpdateResult<T>(e as Exception?, result);
       }
+      debugPrint('INVOKE_CHANNEL_METHOD_ERROR: $e\n$s');
+      _parsePlatformExceptionAndUpdateResult<T>(
+        e is Exception ? e : Exception(e.toString()),
+        result,
+      );
     }
 
     return result;
@@ -758,9 +759,11 @@ class DeviceCalendarPlugin {
     debugPrint('$exception');
 
     if (exception is PlatformException) {
+      final int errorCode =
+          int.tryParse(exception.code) ?? ErrorCodes.platformSpecific;
       result.errors.add(
         ResultError(
-          ErrorCodes.platformSpecific,
+          errorCode,
           '${ErrorMessages.unknownDeviceExceptionTemplate}, Code: ${exception.code}, Exception: ${exception.message}',
         ),
       );
