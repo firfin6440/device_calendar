@@ -774,7 +774,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             currentMasterStatus != change.newStatus
         ) {
             finishWithSuccess(
-                attendeeStatusResult("conflict", currentMasterStatus, masterEventId),
+                attendeeStatusResult("conflict", currentMasterStatus, masterEventId,
+                    diagnostics = mapOf("stage" to "entireSeries.rsvp.precondition")),
                 pendingChannelResult
             )
             return
@@ -943,7 +944,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             attendeeStatusResult(
                 if (currentStatus == change.newStatus) "alreadyCurrent" else "conflict",
                 currentStatus,
-                eventId
+                eventId,
+                diagnostics = mapOf("stage" to "event.rsvp.compareAndSetNoRows")
             ),
             pendingChannelResult
         )
@@ -952,11 +954,16 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     private fun attendeeStatusResult(
         outcome: String,
         currentStatus: Int,
-        resultingEventId: String? = null
+        resultingEventId: String? = null,
+        diagnostics: Map<String, Any?>? = null
     ): Map<String, Any?> = mapOf(
         "outcome" to outcome,
         "currentStatus" to currentStatus,
-        "resultingEventId" to resultingEventId
+        "resultingEventId" to resultingEventId,
+        "diagnostics" to diagnostics.takeIf {
+            ((_context?.applicationInfo?.flags ?: 0) and
+                android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        }
     )
 
     private fun queryAttendeeStatus(
@@ -1187,11 +1194,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     resetDetachedOverrides,
                     recurrenceChange != null && requestedRecurrence?.rawRule != null
                 )) {
-                    RecurrenceExceptionCleanup.ALL -> recurringExceptionResetOperations(
-                        contentResolver = _context?.contentResolver,
-                        calendarId = calendarId,
-                        masterEventId = masterEventId
-                    )
+                    RecurrenceExceptionCleanup.ALL -> emptyList()
                     RecurrenceExceptionCleanup.OUTSIDE_RULE -> recurringExceptionsOutsideRuleOperations(
                         contentResolver = _context?.contentResolver,
                         calendarId = calendarId,
@@ -1214,7 +1217,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     masterEventId,
                     eventChanges,
                     pendingChannelResult,
-                    preEventOperations = removedExceptionOperations
+                    preEventOperations = removedExceptionOperations,
+                    resetSeriesExceptions = resetDetachedOverrides
                 )
             }
             return
@@ -1257,6 +1261,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             )
             finishWithSuccess(
                 eventChangeResultForCurrent(
+                    "entireSeries.selectedOccurrence.precondition",
                     occurrenceValues,
                     eventChanges["color"] as? Map<*, *>,
                     requestedColorValue(eventChanges),
@@ -1274,7 +1279,15 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     locationChange = locationChange,
                     requestedLocation = requestedLocation(eventChanges),
                     recurrenceChange = recurrenceChange,
-                    requestedRecurrence = requestedRecurrence
+                    requestedRecurrence = requestedRecurrence,
+                    diagnosticContext = mapOf(
+                        "masterEventId" to masterEventId,
+                        "selectedEventId" to selectedEventId,
+                        "originalOccurrenceStart" to originalOccurrenceStart,
+                        "selectedOccurrenceWasDetached" to selectedOccurrenceWasDetached,
+                        "masterRange" to masterRange.toMap(),
+                        "currentOccurrence" to currentOccurrence?.toMap()
+                    )
                 ),
                 pendingChannelResult
             )
@@ -1327,24 +1340,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 pendingChannelResult
             )
         } else {
-            val exceptionResetOperations = recurringExceptionResetOperations(
-                contentResolver = _context?.contentResolver,
-                calendarId = calendarId,
-                masterEventId = masterEventId
-            )
-            if (isTestRecTitle(currentMaster.title)) {
-                Log.i(
-                    TEST_REC_TRACE_TAG,
-                    "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN exception-reset\" " +
-                        "source=device_calendar count=${exceptionResetOperations.size}"
-                )
-            }
             applyEventChangesToEvent(
                 calendarId,
                 masterEventId,
                 translatedChanges,
                 pendingChannelResult,
-                preEventOperations = exceptionResetOperations
+                resetSeriesExceptions = true
             )
         }
     }
@@ -1359,29 +1360,152 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val originalInstanceTime: Long
     )
 
-    /**
-     * Resets detached occurrences when an all-series date/time change is
-     * applied.
-     *
-     * Google Calendar and Samsung Calendar both define this operation as a
-     * flattening of the series: every exception is removed and the provider
-     * regenerates every occurrence from the updated master. Keep the exception
-     * removals and master update in one provider batch so observers never see
-     * a committed half-state from our own write.
-     */
+    /** All-series reset preserves surviving native rows, including their sync IDs. */
     private fun recurringExceptionResetOperations(
-        contentResolver: ContentResolver?,
+        contentResolver: ContentResolver,
         calendarId: String,
-        masterEventId: String
+        masterEventId: String,
+        originalRange: EventDateRangeValue,
+        originalRule: String,
+        resultingRange: EventDateRangeValue,
+        resultingRule: String,
+        masterChanges: ContentValues,
+        eventChanges: Map<String, Any?>,
+        ownerEmail: String?
     ): List<ContentProviderOperation> {
-        if (contentResolver == null) return emptyList()
-        return recurrenceExceptionIdentities(
-            contentResolver = contentResolver,
-            calendarId = calendarId,
-            masterEventId = masterEventId
-        ).map { identity ->
-            deleteRecurrenceExceptionOperation(calendarId, identity)
+        val identities = recurrenceExceptionIdentities(contentResolver, calendarId, masterEventId)
+        val operations = mutableListOf<ContentProviderOperation>()
+        val memberQuery = recurrenceExceptionResetQuery(calendarId, masterEventId,
+            queryMasterSyncId(contentResolver, masterEventId.toLong()))
+        operations.add(ContentProviderOperation.newAssertQuery(Events.CONTENT_URI)
+            .withSelection(memberQuery.selection, memberQuery.selectionArgs)
+            .withExpectedCount(identities.size).build())
+        if (identities.isEmpty()) return operations
+        // Copy actual provider fields, not a partial UI event. Assertions make
+        // a concurrent template/child change abort the entire batch.
+        fun readGuarded(uri: Uri, columns: Array<String>, selection: String,
+                        args: Array<String>): List<ContentValues> {
+            val rows = mutableListOf<ContentValues>()
+            val cursor = contentResolver.query(uri, arrayOf("_id", *columns), selection, args, null)
+                ?: error("Provider reset source unavailable")
+            cursor.use {
+                while (it.moveToNext()) {
+                    val id = it.getString(0)
+                    val values = ContentValues()
+                    columns.forEachIndexed { index, column ->
+                        if (it.isNull(index + 1)) values.putNull(column)
+                        else values.put(column, it.getString(index + 1))
+                    }
+                    operations.add(calendarProviderRowGuard(uri, id, selection, args, values))
+                    rows.add(values)
+                }
+            }
+            operations.add(ContentProviderOperation.newAssertQuery(uri)
+                .withSelection(selection, args).withExpectedCount(rows.size).build())
+            return rows
         }
+        val template = readGuarded(Events.CONTENT_URI, arrayOf(
+            Events.TITLE, Events.DESCRIPTION, Events.EVENT_LOCATION, Events.CUSTOM_APP_URI,
+            Events.AVAILABILITY, Events.STATUS, Events.EVENT_COLOR, Events.EVENT_COLOR_KEY,
+            Events.ORGANIZER, Events.HAS_ATTENDEE_DATA, Events.GUESTS_CAN_MODIFY,
+            Events.GUESTS_CAN_INVITE_OTHERS, Events.GUESTS_CAN_SEE_GUESTS,
+            Events.ACCESS_LEVEL, Events.DTSTART, Events.RRULE, Events.DTEND,
+            Events.DURATION, Events.EVENT_TIMEZONE, Events.EVENT_END_TIMEZONE, Events.ALL_DAY
+        ), "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND ${Events.DELETED} != 1",
+            arrayOf(masterEventId, calendarId)).single()
+        // Date/definition read above must belong to the same source generation
+        // as the recurrence mapping, even if only a colour/title was requested.
+        val storedStart = template.getAsLong(Events.DTSTART)
+        val storedEnd = template.getAsLong(Events.DTEND) ?:
+            parseDurationMillis(template.getAsString(Events.DURATION))?.let { storedStart + it }
+        val storedZone = template.getAsString(Events.EVENT_TIMEZONE) ?: TimeZone.getDefault().id
+        if (storedStart != originalRange.startDate || storedEnd != originalRange.endDate ||
+            storedZone != originalRange.startTimeZone ||
+            (template.getAsString(Events.EVENT_END_TIMEZONE) ?: storedZone) != originalRange.endTimeZone ||
+            (template.getAsInteger(Events.ALL_DAY) != 0) != originalRange.allDay ||
+            template.getAsString(Events.RRULE) != originalRule) {
+            throw android.content.OperationApplicationException("Series changed during reset planning")
+        }
+        template.putAll(masterChanges)
+        val attendeeColumns = arrayOf(CalendarContract.Attendees.ATTENDEE_EMAIL,
+            CalendarContract.Attendees.ATTENDEE_NAME, CalendarContract.Attendees.ATTENDEE_TYPE,
+            CalendarContract.Attendees.ATTENDEE_RELATIONSHIP, CalendarContract.Attendees.ATTENDEE_STATUS)
+        var attendees = readGuarded(CalendarContract.Attendees.CONTENT_URI, attendeeColumns,
+            "${CalendarContract.Attendees.EVENT_ID} = ?", arrayOf(masterEventId))
+        val reminderColumns = arrayOf(CalendarContract.Reminders.MINUTES, CalendarContract.Reminders.METHOD)
+        var reminders = readGuarded(CalendarContract.Reminders.CONTENT_URI, reminderColumns,
+            "${CalendarContract.Reminders.EVENT_ID} = ?", arrayOf(masterEventId))
+        if (eventChanges.containsKey("attendees") || eventChanges.containsKey("resources")) {
+            var people = attendees.map { row -> Attendee(
+                row.getAsString(CalendarContract.Attendees.ATTENDEE_EMAIL) ?: "",
+                row.getAsString(CalendarContract.Attendees.ATTENDEE_NAME),
+                row.getAsInteger(CalendarContract.Attendees.ATTENDEE_TYPE) ?: 0,
+                row.getAsInteger(CalendarContract.Attendees.ATTENDEE_STATUS),
+                row.getAsInteger(CalendarContract.Attendees.ATTENDEE_RELATIONSHIP) ==
+                    CalendarContract.Attendees.RELATIONSHIP_ORGANIZER,
+                row.getAsString(CalendarContract.Attendees.ATTENDEE_EMAIL).equals(ownerEmail, true)
+            ) }
+            (eventChanges["resources"] as? Map<*, *>)?.let {
+                people = attendeesWithResources(people, parseEventResourceValues(it["requested"])!!)
+            }
+            (eventChanges["attendees"] as? Map<*, *>)?.let {
+                people = attendeesWithPeople(people, parseEventAttendeeValues(it["requested"])!!,
+                    ownerEmail, template.getAsString(Events.ORGANIZER))
+            }
+            attendees = people.map { attendee -> ContentValues().apply {
+                put(CalendarContract.Attendees.ATTENDEE_EMAIL, attendee.emailAddress)
+                put(CalendarContract.Attendees.ATTENDEE_NAME, attendee.name)
+                put(CalendarContract.Attendees.ATTENDEE_TYPE, attendee.role)
+                put(CalendarContract.Attendees.ATTENDEE_RELATIONSHIP, recurrenceSplitAttendeeRelationship(attendee))
+                put(CalendarContract.Attendees.ATTENDEE_STATUS, attendee.attendanceStatus)
+            } }
+        }
+        (eventChanges["reminders"] as? Map<*, *>)?.let { change ->
+            reminders = parseEventReminderValues(change["requested"])!!.map { reminder -> ContentValues().apply {
+                put(CalendarContract.Reminders.MINUTES, reminder.minutes)
+                put(CalendarContract.Reminders.METHOD, reminder.method)
+            } }
+        }
+        fun replaceChildren(uri: Uri, eventColumn: String, eventId: Long, rows: List<ContentValues>) {
+            operations.add(ContentProviderOperation.newDelete(uri)
+                .withSelection("$eventColumn = ?", arrayOf(eventId.toString())).build())
+            rows.forEach { row -> operations.add(ContentProviderOperation.newInsert(uri)
+                .withValues(row).withValue(eventColumn, eventId).build()) }
+        }
+        val resets = recurrenceExceptionResets(identities.map { it.originalInstanceTime },
+            originalRange, originalRule, resultingRange, resultingRule)
+        identities.zip(resets).forEach { (identity, reset) ->
+            val range = reset.range
+            if (range == null) {
+                operations.add(deleteRecurrenceExceptionOperation(calendarId, identity))
+            } else {
+                val values = ContentValues(template)
+                recurrenceExceptionResetValues(range).forEach { (column, value) ->
+                    when (value) {
+                        null -> values.putNull(column)
+                        is Long -> values.put(column, value)
+                        is Int -> values.put(column, value)
+                        is String -> values.put(column, value)
+                    }
+                }
+                operations.add(ContentProviderOperation.newUpdate(Events.CONTENT_URI)
+                    .withSelection("${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
+                        "${Events.ORIGINAL_ID} = ? AND ${Events.ORIGINAL_INSTANCE_TIME} = ? AND ${Events.DELETED} != 1",
+                        arrayOf(identity.eventId.toString(), calendarId, identity.originalId,
+                            identity.originalInstanceTime.toString()))
+                    .withValues(values).withExpectedCount(1).build())
+                replaceChildren(CalendarContract.Attendees.CONTENT_URI, CalendarContract.Attendees.EVENT_ID,
+                    identity.eventId, attendees)
+                replaceChildren(CalendarContract.Reminders.CONTENT_URI, CalendarContract.Reminders.EVENT_ID,
+                    identity.eventId, reminders)
+            }
+        }
+        if (isTestRecTitle(template.getAsString(Events.TITLE))) {
+            Log.i(TEST_REC_TRACE_TAG, "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN exception-reset-in-place\" " +
+                "source=device_calendar updated=${resets.count { it.range != null }} " +
+                "removedSlots=${resets.count { it.range == null }}")
+        }
+        return operations
     }
 
     /**
@@ -1779,6 +1903,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (!expectedStillMatches) {
             finishWithSuccess(
                 eventChangeResultForCurrent(
+                    "standaloneReplacement.precondition",
                     currentMaster,
                     colorChange,
                     requestedColorValue(eventChanges),
@@ -1918,7 +2043,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
         val results = try {
             resolver.applyBatch(CalendarContract.AUTHORITY, operations)
-        } catch (_: android.content.OperationApplicationException) {
+        } catch (exception: android.content.OperationApplicationException) {
             val latest = queryStoredEventChangeValues(
                 resolver,
                 calendarId,
@@ -1926,6 +2051,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             ) ?: currentMaster
             finishWithSuccess(
                 eventChangeResultForCurrent(
+                    "standaloneReplacement.atomicBatch",
                     latest,
                     colorChange,
                     requestedColorValue(eventChanges),
@@ -1943,7 +2069,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     locationChange = locationChange,
                     requestedLocation = requestedLocation(eventChanges),
                     recurrenceChange = recurrenceChange,
-                    requestedRecurrence = requestedRecurrence
+                    requestedRecurrence = requestedRecurrence,
+                    batchFailure = exception
                 ),
                 pendingChannelResult
             )
@@ -2165,7 +2292,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             "conflict"
                         },
                         currentAttendeeStatus!!,
-                        attendeeSourceEventId
+                        attendeeSourceEventId,
+                        diagnostics = mapOf("stage" to "thisAndFollowing.rsvp.precondition")
                     ),
                     pendingChannelResult
                 )
@@ -2181,6 +2309,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             )
             finishWithSuccess(
                 eventChangeResultForCurrent(
+                    "thisAndFollowing.selectedOccurrence.precondition",
                     occurrenceValues,
                     colorChange,
                     requestedColorValue(eventChanges),
@@ -2479,7 +2608,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
         val results = try {
             resolver.applyBatch(CalendarContract.AUTHORITY, operations)
-        } catch (_: android.content.OperationApplicationException) {
+        } catch (exception: android.content.OperationApplicationException) {
             if (attendeeStatusChange != null) {
                 val latestStatus = queryAttendeeStatus(
                     resolver,
@@ -2501,7 +2630,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                                 "conflict"
                             },
                             latestStatus,
-                            attendeeSourceEventId
+                            attendeeSourceEventId,
+                            diagnostics = mapOf(
+                                "stage" to "thisAndFollowing.atomicBatch",
+                                "batchExceptionType" to exception.javaClass.name,
+                                "batchExceptionMessage" to exception.message
+                            )
                         ),
                         pendingChannelResult
                     )
@@ -2515,6 +2649,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             ) ?: currentMaster
             finishWithSuccess(
                 eventChangeResultForCurrent(
+                    "thisAndFollowing.atomicBatch",
                     latestValues,
                     colorChange,
                     requestedColorValue(eventChanges),
@@ -2532,7 +2667,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     locationChange = locationChange,
                     requestedLocation = requestedLocation,
                     recurrenceChange = recurrenceChange,
-                    requestedRecurrence = requestedRecurrence
+                    requestedRecurrence = requestedRecurrence,
+                    batchFailure = exception
                 ),
                 pendingChannelResult
             )
@@ -2665,9 +2801,11 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         eventId: String,
         eventChanges: Map<String, Any?>,
         pendingChannelResult: MethodChannel.Result,
-        preEventOperations: List<ContentProviderOperation> = emptyList()
+        preEventOperations: List<ContentProviderOperation> = emptyList(),
+        resetSeriesExceptions: Boolean = false
     ) {
 
+        var rejectedBatch: android.content.OperationApplicationException? = null
         val eventIdNumber = eventId.toLongOrNull()
         val calendarIdNumber = calendarId.toLongOrNull()
         val colorChange = eventChanges["color"] as? Map<*, *>
@@ -2766,6 +2904,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (!expectedValuesStillMatch) {
             finishWithSuccess(
                 eventChangeResultForCurrent(
+                    "event.precondition",
                     currentValues,
                     colorChange,
                     requestedColorValue,
@@ -3160,8 +3299,19 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             }
         }
 
+        val resetCalendar = if (resetSeriesExceptions) {
+            retrieveCalendar(calendarId, pendingChannelResult, true) ?: return
+        } else null
         try {
-            contentResolver.applyBatch(CalendarContract.AUTHORITY, operations)
+            runAtomicCalendarWrite {
+                if (resetSeriesExceptions) {
+                    operations.addAll(0, recurringExceptionResetOperations(contentResolver,
+                        calendarId, eventId, currentValues.dateRange!!, currentValues.recurrenceRule!!,
+                        requestedDateRange ?: currentValues.dateRange!!, resultingRecurrenceRule!!,
+                        values, eventChanges, resetCalendar?.ownerAccount))
+                }
+                contentResolver.applyBatch(CalendarContract.AUTHORITY, operations)
+            }
             finishWithSuccess(
                 eventChangeResult(
                     "updated",
@@ -3179,9 +3329,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 pendingChannelResult
             )
             return
-        } catch (_: android.content.OperationApplicationException) {
+        } catch (exception: CalendarAtomicWriteRejected) {
+            finishWithError(exception.code,
+                exception.message ?: "The atomic calendar write was rejected", pendingChannelResult)
+            return
+        } catch (exception: android.content.OperationApplicationException) {
             // One of the optimistic assertions failed. Re-read every field so
             // the caller can resolve the complete concurrent change.
+            rejectedBatch = exception
         } catch (exception: Exception) {
             finishWithError(
                 EC.GENERIC_ERROR,
@@ -3203,6 +3358,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
         finishWithSuccess(
             eventChangeResultForCurrent(
+                "event.atomicBatch",
                 latestValues,
                 colorChange,
                 requestedColorValue,
@@ -3220,7 +3376,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 locationChange = locationChange,
                 requestedLocation = requestedLocation,
                 recurrenceChange = recurrenceChange,
-                requestedRecurrence = requestedRecurrence
+                requestedRecurrence = requestedRecurrence,
+                batchFailure = rejectedBatch
             ),
             pendingChannelResult
         )
@@ -3363,7 +3520,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             "conflict"
                         },
                         currentAttendeeStatus!!,
-                        masterEventId
+                        masterEventId,
+                        diagnostics = mapOf("stage" to "occurrence.rsvp.precondition")
                     ),
                     pendingChannelResult
                 )
@@ -3380,6 +3538,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             )
             finishWithSuccess(
                 eventChangeResultForCurrent(
+                    "occurrence.precondition",
                     occurrenceValues,
                     colorChange,
                     requestedColorValue,
@@ -3787,7 +3946,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
         var results = try {
             contentResolver.applyBatch(CalendarContract.AUTHORITY, operations)
-        } catch (_: android.content.OperationApplicationException) {
+        } catch (exception: android.content.OperationApplicationException) {
             if (attendeeStatusChange != null) {
                 val latestStatus = queryAttendeeStatus(
                     contentResolver,
@@ -3809,7 +3968,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                                 "conflict"
                             },
                             latestStatus,
-                            masterEventId
+                            masterEventId,
+                            diagnostics = mapOf(
+                                "stage" to "occurrence.atomicBatch",
+                                "batchExceptionType" to exception.javaClass.name,
+                                "batchExceptionMessage" to exception.message
+                            )
                         ),
                         pendingChannelResult
                     )
@@ -3842,6 +4006,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             )
             finishWithSuccess(
                 eventChangeResultForCurrent(
+                    "occurrence.atomicBatch",
                     latestOccurrenceValues,
                     colorChange,
                     requestedColorValue,
@@ -3857,7 +4022,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     resourcesChange = resourcesChange,
                     requestedResources = requestedResources,
                     locationChange = locationChange,
-                    requestedLocation = requestedLocation
+                    requestedLocation = requestedLocation,
+                    batchFailure = exception
                 ),
                 pendingChannelResult
             )
@@ -4067,6 +4233,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     }
 
     private fun eventChangeResultForCurrent(
+        rejectionStage: String,
         current: StoredEventChangeValues,
         colorChange: Map<*, *>?,
         requestedColor: Int?,
@@ -4084,7 +4251,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         locationChange: Map<*, *>? = null,
         requestedLocation: String? = null,
         recurrenceChange: Map<*, *>? = null,
-        requestedRecurrence: EventRecurrenceValue? = null
+        requestedRecurrence: EventRecurrenceValue? = null,
+        batchFailure: Exception? = null,
+        diagnosticContext: Map<String, Any?> = emptyMap()
     ): Map<String, Any?> {
         val conflictingFields = mutableListOf<String>()
         if (colorChange != null &&
@@ -4116,7 +4285,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (recurrenceChange != null && currentRecurrence.rule != requestedRecurrence?.rule) {
             conflictingFields.add("recurrence")
         }
-        return eventChangeResult(
+        val response = eventChangeResult(
             if (conflictingFields.isEmpty()) "alreadyCurrent" else "conflict",
             conflictingFields,
             current.color,
@@ -4129,6 +4298,57 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             location = current.location,
             recurrence = currentRecurrence
         )
+        val diagnostics = calendarRejectionDiagnostics(
+            enabled = ((_context?.applicationInfo?.flags ?: 0) and
+                android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+            titles = listOf(current.title, titleChange?.get("expected") as? String,
+                requestedTitle),
+            stage = rejectionStage,
+            batchFailure = batchFailure
+        ) {
+            val changes = mapOf(
+                "color" to colorChange, "title" to titleChange,
+                "location" to locationChange, "dateRange" to dateRangeChange,
+                "reminders" to remindersChange, "attendees" to attendeesChange,
+                "resources" to resourcesChange, "recurrence" to recurrenceChange
+            ).filterValues { it != null }
+            val expectedColor = colorChange?.get("expected") as? Map<*, *>
+            // Use the same typed comparisons as the native preflight guards.
+            // After a batch failure these describe the RE-READ, not necessarily
+            // the values at the instant Android rejected an assertion.
+            val matches = mapOf(
+                "color" to (current.color == (expectedColor?.get("color") as? Number)?.toInt() &&
+                    current.colorKey == (expectedColor?.get("colorKey") as? Number)?.toInt()),
+                "title" to (current.title == titleChange?.get("expected")),
+                "location" to (current.location == locationChange?.get("expected")),
+                "dateRange" to (current.dateRange == parseEventDateRangeValue(dateRangeChange?.get("expected"))),
+                "reminders" to (current.reminders == parseEventReminderValues(remindersChange?.get("expected"))),
+                "attendees" to sameAttendeeValues(current.attendees,
+                    parseEventAttendeeValues(attendeesChange?.get("expected")) ?: emptyList()),
+                "resources" to sameResourceValues(current.resources,
+                    parseEventResourceValues(resourcesChange?.get("expected")) ?: emptyList()),
+                "recurrence" to (currentRecurrence.rule ==
+                    parseEventRecurrenceValue(recurrenceChange?.get("expected"))?.rule)
+            ).filterKeys { it in changes }
+            mapOf(
+                "nativeChanges" to changes,
+                "expectedMatchesAtRead" to matches,
+                "expectedMismatchesAtRead" to matches.filterValues { !it }.keys.toList(),
+                "comparisonRead" to if (batchFailure == null) "preflight" else "afterBatchFailure",
+                "comparisonValues" to response["currentValues"],
+                // Some callers synthesize an occurrence view from its master.
+                // Do not describe these fields as an independent raw-row read.
+                "comparisonStorage" to mapOf(
+                    "deleted" to current.deleted, "dtstart" to current.rawStartDate,
+                    "dtend" to current.rawEndDate, "duration" to current.duration,
+                    "startTimeZone" to current.rawStartTimeZone,
+                    "endTimeZone" to current.rawEndTimeZone,
+                    "allDay" to current.allDay, "rrule" to current.recurrenceRule
+                ),
+                "context" to diagnosticContext
+            )
+        }
+        return if (diagnostics == null) response else response + ("diagnostics" to diagnostics)
     }
 
     private fun retrieveAttendeeValues(

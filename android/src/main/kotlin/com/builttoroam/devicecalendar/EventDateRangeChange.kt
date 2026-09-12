@@ -148,8 +148,8 @@ internal data class RecurrenceExceptionResetQuery(
  * Selects every detached row belonging to a recurring master. Android
  * providers may store ORIGINAL_ID as either the local numeric id or the
  * sync-adapter id, so both identities must be covered. Cancellations are
- * intentionally included: flattening an entire series restores those slots
- * just like Google Calendar and Samsung Calendar do.
+ * intentionally included: resetting an entire series restores those slots
+ * in place. Deleting the exception can instead cancel its occurrence.
  */
 internal fun recurrenceExceptionResetQuery(
     calendarId: String,

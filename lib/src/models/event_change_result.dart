@@ -30,6 +30,9 @@ class EventChangeResult {
   final EventRecurrenceValue? currentRecurrence;
   final String? resultingEventId;
 
+  /// Optional debug-only native rejection evidence. Never drives save policy.
+  final Map<String, Object?>? diagnostics;
+
   const EventChangeResult({
     required this.outcome,
     this.conflictingFields = const <EventChangeField>{},
@@ -42,5 +45,6 @@ class EventChangeResult {
     this.currentResources,
     this.currentRecurrence,
     this.resultingEventId,
+    this.diagnostics,
   });
 }

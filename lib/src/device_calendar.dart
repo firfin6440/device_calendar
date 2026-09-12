@@ -255,6 +255,12 @@ class DeviceCalendarPlugin {
           outcome: outcome,
           currentStatus: AndroidAttendanceStatus.values[currentStatusIndex],
           resultingEventId: response['resultingEventId']?.toString(),
+          diagnostics: response['diagnostics'] is Map
+              ? {
+                  for (final entry in (response['diagnostics'] as Map).entries)
+                    if (entry.key is String) entry.key as String: entry.value
+                }
+              : null,
         );
       },
     );
@@ -404,6 +410,12 @@ class DeviceCalendarPlugin {
                 )
               : null,
           resultingEventId: rawResultingEventId?.toString(),
+          diagnostics: response['diagnostics'] is Map
+              ? {
+                  for (final entry in (response['diagnostics'] as Map).entries)
+                    if (entry.key is String) entry.key as String: entry.value
+                }
+              : null,
         );
       },
     );

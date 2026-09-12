@@ -10,7 +10,7 @@ import org.junit.Test
 
 class RecurrenceStorageChangesTest {
     @Test
-    fun explicitFieldOnlyResetRemovesAllExceptions() {
+    fun explicitFieldOnlyResetTargetsAllExceptions() {
         assertEquals(RecurrenceExceptionCleanup.ALL, recurrenceExceptionCleanup(true, false))
     }
 

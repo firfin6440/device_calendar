@@ -17,9 +17,13 @@ class AttendeeStatusUpdateResult {
   final AndroidAttendanceStatus currentStatus;
   final String? resultingEventId;
 
+  /// Optional native rejection evidence; diagnostic only, not a new outcome.
+  final Map<String, Object?>? diagnostics;
+
   const AttendeeStatusUpdateResult({
     required this.outcome,
     required this.currentStatus,
     this.resultingEventId,
+    this.diagnostics,
   });
 }

@@ -526,6 +526,54 @@ void main() {
     expect(result.data?.currentTitle, 'Concurrent title');
   });
 
+  for (final withDiagnostics in [false, true]) {
+    test('RejectionDiagnostics_RoundTrip_$withDiagnostics', () async {
+      final diagnostics = <String, Object?>{
+        'stage': 'event.atomicBatch',
+        'expectedMismatchesAtRead': ['title'],
+        'comparisonStorage': {
+          'dtstart': 1788810300000,
+          'dtend': null,
+          'duration': 'P3600S',
+          'startTimeZone': 'Europe/London'
+        },
+        'batchExceptionMessage': 'Expected 1 rows but actual 0 🥕',
+      };
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+              channel,
+              (call) async => {
+                    'outcome': 'conflict',
+                    if (call.method == 'updateAttendeeStatus')
+                      'currentStatus': AndroidAttendanceStatus.Tentative.index,
+                    'conflictingFields': ['title'],
+                    'currentValues': {'title': 'test-rec'},
+                    if (withDiagnostics) 'diagnostics': diagnostics,
+                  });
+      final event = await deviceCalendarPlugin.applyEventChanges(
+        calendarId: '7',
+        eventId: '20970',
+        changes: const EventChangeSet(
+            title: EventFieldChange(expected: 'old', requested: 'test-rec')),
+      );
+      expect(event.isSuccess, isTrue);
+      expect(event.data!.outcome, EventChangeOutcome.conflict);
+      expect(event.data!.currentTitle, 'test-rec');
+      expect(event.data!.diagnostics, withDiagnostics ? diagnostics : null);
+      final rsvp = await deviceCalendarPlugin.updateAttendeeStatus(
+        calendarId: '7',
+        eventId: '20970',
+        attendeeEmail: 'me@example.com',
+        expectedStatus: AndroidAttendanceStatus.Accepted,
+        newStatus: AndroidAttendanceStatus.Declined,
+      );
+      expect(rsvp.isSuccess, isTrue);
+      expect(rsvp.data!.outcome, AttendeeStatusUpdateOutcome.conflict);
+      expect(rsvp.data!.currentStatus, AndroidAttendanceStatus.Tentative);
+      expect(rsvp.data!.diagnostics, withDiagnostics ? diagnostics : null);
+    });
+  }
+
   test('ApplyEventChanges_ReturnsCurrentLocationOnConflict', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
