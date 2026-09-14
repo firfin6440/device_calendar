@@ -422,22 +422,16 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             ContentUris.appendId(eventsUriBuilder, endDate ?: Date(Long.MAX_VALUE).time)
 
             val eventsUri = eventsUriBuilder.build()
-            val eventsCalendarQuery = "(${Events.CALENDAR_ID} = $calendarId)"
-            val eventsNotDeletedQuery = "(${Events.DELETED} != 1)"
-            val eventsIdsQuery =
-                "(${CalendarContract.Instances.EVENT_ID} IN (${eventIds.joinToString()}))"
-
-            var eventsSelectionQuery = "$eventsCalendarQuery AND $eventsNotDeletedQuery"
-            if (eventIds.isNotEmpty()) {
-                eventsSelectionQuery += " AND ($eventsIdsQuery)"
-            }
+            val instanceQuery = calendarInstanceQuery(
+                calendarId, startDate ?: 0L, endDate ?: Long.MAX_VALUE, eventIds
+            )
             val eventsSortOrder = Events.DTSTART + " DESC"
 
             val eventsCursor = contentResolver?.query(
                 eventsUri,
                 Cst.EVENT_PROJECTION,
-                eventsSelectionQuery,
-                null,
+                instanceQuery.selection,
+                instanceQuery.selectionArgs,
                 eventsSortOrder
             )
 
