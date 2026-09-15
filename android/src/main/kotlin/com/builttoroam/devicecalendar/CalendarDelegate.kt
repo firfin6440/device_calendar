@@ -60,6 +60,8 @@ private const val TEST_REC_TRACE_TAG = "TEST_REC_STATE"
 class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     PluginRegistry.RequestPermissionsResultListener {
 
+    internal var debugLoggingEnabled = false
+
     private val _cachedParametersMap: MutableMap<Int, CalendarMethodsParametersCacheModel> =
         mutableMapOf()
     private var _binding: ActivityPluginBinding? = binding
@@ -405,63 +407,64 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             return
         }
 
+        // Request-owned snapshot before scheduling or a permission retry.
+        val requestedEventIds = eventIds.toList()
         if (arePermissionsGranted()) {
-            val calendar = retrieveCalendar(calendarId, pendingChannelResult, true)
-            if (calendar == null) {
-                finishWithError(
-                    EC.NOT_FOUND,
-                    "Couldn't retrieve the Calendar with ID $calendarId",
-                    pendingChannelResult
-                )
-                return
-            }
-
             val contentResolver: ContentResolver? = _context?.contentResolver
-            val eventsUriBuilder = CalendarContract.Instances.CONTENT_URI.buildUpon()
-            ContentUris.appendId(eventsUriBuilder, startDate ?: Date(0).time)
-            ContentUris.appendId(eventsUriBuilder, endDate ?: Date(Long.MAX_VALUE).time)
-
-            val eventsUri = eventsUriBuilder.build()
-            val instanceQuery = calendarInstanceQuery(
-                calendarId, startDate ?: 0L, endDate ?: Long.MAX_VALUE, eventIds
-            )
-            val eventsSortOrder = Events.DTSTART + " DESC"
-
-            val eventsCursor = contentResolver?.query(
-                eventsUri,
-                Cst.EVENT_PROJECTION,
-                instanceQuery.selection,
-                instanceQuery.selectionArgs,
-                eventsSortOrder
-            )
-
-            val events: MutableList<Event> = mutableListOf()
-
+            val gson = _gson
             val exceptionHandler = CoroutineExceptionHandler { _, exception ->
                 uiThreadHandler.post {
                     finishWithError(EC.GENERIC_ERROR, exception.message, pendingChannelResult)
                 }
             }
 
+            // Only this range read moves. Mutation commands retain their existing
+            // execution/atomicity boundaries. No shared result or new read cache.
             GlobalScope.launch(Dispatchers.IO + exceptionHandler) {
-                while (eventsCursor?.moveToNext() == true) {
-                    val event = parseEvent(calendarId, eventsCursor) ?: continue
-                    events.add(event)
+                // The old retrieveCalendar helper owns replies/permission-cache
+                // mutation. It must not be called from this worker.
+                val calendar = readCalendarForEventRange(calendarId, contentResolver)
+                if (calendar == null) {
+                    uiThreadHandler.post {
+                        finishWithError(EC.NOT_FOUND,
+                            "Couldn't retrieve the Calendar with ID $calendarId", pendingChannelResult)
+                    }
+                    return@launch
+                }
+                val eventsUriBuilder = CalendarContract.Instances.CONTENT_URI.buildUpon()
+                ContentUris.appendId(eventsUriBuilder, startDate ?: Date(0).time)
+                ContentUris.appendId(eventsUriBuilder, endDate ?: Date(Long.MAX_VALUE).time)
+                val instanceQuery = calendarInstanceQuery(
+                    calendarId, startDate ?: 0L, endDate ?: Long.MAX_VALUE, requestedEventIds
+                )
+                val events = mutableListOf<Event>()
+                contentResolver?.query(
+                    eventsUriBuilder.build(),
+                    Cst.EVENT_PROJECTION,
+                    instanceQuery.selection,
+                    instanceQuery.selectionArgs,
+                    Events.DTSTART + " DESC"
+                ).use { cursor ->
+                    checkNotNull(cursor) { "CalendarProvider returned no Instances cursor" }
+                    while (cursor.moveToNext()) {
+                        val event = parseEvent(calendarId, cursor) ?: continue
+                        events.add(event)
+                    }
                 }
                 for (event in events) {
                     val attendees = attendeesWithAuthoritativeSelfStatus(
-                        retrieveAttendees(calendar, event.eventId!!, contentResolver),
+                        retrieveAttendees(calendar, event.eventId!!, contentResolver,
+                            requireCompleteRead = true),
                         calendar.ownerAccount,
                         event.selfAttendeeStatus
                     )
                     event.organizer =
                         attendees.firstOrNull { it.isOrganizer != null && it.isOrganizer }
                     event.attendees = attendees
-                    event.reminders = retrieveReminders(event.eventId!!, contentResolver)
+                    event.reminders = retrieveReminders(event.eventId!!, contentResolver,
+                        requireCompleteRead = true)
                 }
-            }.invokeOnCompletion { cause ->
-                eventsCursor?.close()
-                if (cause == null) {
+                if (debugLoggingEnabled) {
                     events.asSequence()
                         .filter { isTestRecTitle(it.eventTitle) }
                         .mapNotNull { event ->
@@ -475,9 +478,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                                 masterId
                             )
                         }
-                    uiThreadHandler.post {
-                        finishWithSuccess(_gson?.toJson(events), pendingChannelResult)
-                    }
+                }
+                val json = gson?.toJson(events)
+                // Post only the prepared result. All cursor cleanup has completed,
+                // including on error, before main-thread reply/cache bookkeeping.
+                uiThreadHandler.post {
+                    finishWithSuccess(json, pendingChannelResult)
                 }
             }
         } else {
@@ -486,12 +492,30 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 RETRIEVE_EVENTS_REQUEST_CODE,
                 calendarId,
                 startDate,
-                endDate
+                endDate,
+                requestedEventIds
             )
             requestPermissions(parameters)
         }
 
         return
+    }
+
+    /** Data-only range metadata read: no Flutter reply or permission-cache access.
+     * Kept separate from retrieveCalendar so write-path behavior is unchanged. */
+    private fun readCalendarForEventRange(
+        calendarId: String,
+        resolver: ContentResolver?
+    ): Calendar? {
+        val id = calendarId.toLongOrNull() ?: return null
+        return resolver?.query(
+            ContentUris.withAppendedId(CalendarContract.Calendars.CONTENT_URI, id),
+            if (atLeastAPI(17)) Cst.CALENDAR_PROJECTION else Cst.CALENDAR_PROJECTION_OLDER_API,
+            null, null, null
+        ).use { cursor ->
+            checkNotNull(cursor) { "CalendarProvider returned no Calendars cursor" }
+            if (cursor.moveToFirst()) parseCalendarRow(cursor) else null
+        }
     }
 
     fun retrieveMasterEvent(
@@ -954,10 +978,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         "outcome" to outcome,
         "currentStatus" to currentStatus,
         "resultingEventId" to resultingEventId,
-        "diagnostics" to diagnostics.takeIf {
-            ((_context?.applicationInfo?.flags ?: 0) and
-                android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-        }
+        "diagnostics" to diagnostics.takeIf { debugLoggingEnabled }
     )
 
     private fun queryAttendeeStatus(
@@ -1199,7 +1220,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     )
                     RecurrenceExceptionCleanup.NONE -> emptyList()
                 }
-                if (isTestRecTitle(currentMaster.title)) {
+                if (debugLoggingEnabled && isTestRecTitle(currentMaster.title)) {
                     Log.i(
                         TEST_REC_TRACE_TAG,
                         "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN recurrence-prune\" " +
@@ -1294,7 +1315,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             expectedOccurrence,
             requestedOccurrence
         )
-        if (isTestRecTitle(currentMaster.title)) {
+        if (debugLoggingEnabled && isTestRecTitle(currentMaster.title)) {
             Log.i(
                 TEST_REC_TRACE_TAG,
                 "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN scope=entireSeries\" " +
@@ -1351,7 +1372,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     private data class StoredRecurrenceExceptionIdentity(
         val eventId: Long,
         val originalId: String,
-        val originalInstanceTime: Long
+        val originalInstanceTime: Long,
+        val isDeleted: Boolean = false,
+        val originalAllDay: Boolean? = null
     )
 
     /** All-series reset preserves surviving native rows, including their sync IDs. */
@@ -1367,14 +1390,31 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         eventChanges: Map<String, Any?>,
         ownerEmail: String?
     ): List<ContentProviderOperation> {
-        val identities = recurrenceExceptionIdentities(contentResolver, calendarId, masterEventId)
+        // A soft-deleted exception still suppresses its original slot during
+        // Android's expansion. An explicit reset of ALL overrides must restore
+        // matching slots, including these rows, without changing their identity.
+        val identities = recurrenceExceptionIdentities(contentResolver, calendarId, masterEventId,
+            includeDeleted = true)
         val operations = mutableListOf<ContentProviderOperation>()
         val memberQuery = recurrenceExceptionResetQuery(calendarId, masterEventId,
-            queryMasterSyncId(contentResolver, masterEventId.toLong()))
+            queryMasterSyncId(contentResolver, masterEventId.toLong()), includeDeleted = true)
         operations.add(ContentProviderOperation.newAssertQuery(Events.CONTENT_URI)
             .withSelection(memberQuery.selection, memberQuery.selectionArgs)
             .withExpectedCount(identities.size).build())
         if (identities.isEmpty()) return operations
+        // Guard even the aliases we will leave deleted: one becoming live
+        // after selection changes which row uniquely owns the reset slot.
+        identities.forEach { identity ->
+            val identityGuard = ContentValues().apply {
+                put(Events.ORIGINAL_ID, identity.originalId)
+                put(Events.ORIGINAL_INSTANCE_TIME, identity.originalInstanceTime)
+                put(Events.DELETED, if (identity.isDeleted) 1 else 0)
+                if (identity.originalAllDay == null) putNull(Events.ORIGINAL_ALL_DAY)
+                else put(Events.ORIGINAL_ALL_DAY, if (identity.originalAllDay) 1 else 0)
+            }
+            operations.add(calendarProviderRowGuard(Events.CONTENT_URI, identity.eventId.toString(),
+                "${Events.CALENDAR_ID} = ?", arrayOf(calendarId), identityGuard))
+        }
         // Copy actual provider fields, not a partial UI event. Assertions make
         // a concurrent template/child change abort the entire batch.
         fun readGuarded(uri: Uri, columns: Array<String>, selection: String,
@@ -1468,12 +1508,28 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
         val resets = recurrenceExceptionResets(identities.map { it.originalInstanceTime },
             originalRange, originalRule, resultingRange, resultingRule)
+        val resetRows = identities.zip(resets).filter { (identity, reset) ->
+            reset.range != null && (!identity.isDeleted || identity.originalAllDay == reset.range.allDay)
+        }.groupBy { (_, reset) -> reset.originalSlot }
+        val selectedResetIds = resetRows.values.map { candidates ->
+            // One live row outranks deleted aliases. With only tombstones, an
+            // ambiguous identity must reject the batch, never revive duplicates.
+            val live = candidates.filter { !it.first.isDeleted }
+            val selected = if (live.isNotEmpty()) live else candidates
+            if (selected.size != 1) throw android.content.OperationApplicationException(
+                "Multiple exception identities for reset slot ${selected.first().second.originalSlot}")
+            selected.single().first.eventId
+        }.toSet()
         identities.zip(resets).forEach { (identity, reset) ->
             val range = reset.range
             if (range == null) {
-                operations.add(deleteRecurrenceExceptionOperation(calendarId, identity))
+                if (!identity.isDeleted) operations.add(deleteRecurrenceExceptionOperation(calendarId, identity))
             } else {
+                // Unknown/different all-day identity is not permission to
+                // resurrect a tombstone at a superficially equal timestamp.
+                if (identity.eventId !in selectedResetIds) return@forEach
                 val values = ContentValues(template)
+                values.put(Events.DELETED, 0)
                 recurrenceExceptionResetValues(range).forEach { (column, value) ->
                     when (value) {
                         null -> values.putNull(column)
@@ -1484,9 +1540,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 }
                 operations.add(ContentProviderOperation.newUpdate(Events.CONTENT_URI)
                     .withSelection("${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
-                        "${Events.ORIGINAL_ID} = ? AND ${Events.ORIGINAL_INSTANCE_TIME} = ? AND ${Events.DELETED} != 1",
+                        "${Events.ORIGINAL_ID} = ? AND ${Events.ORIGINAL_INSTANCE_TIME} = ? AND ${Events.DELETED} = ?",
                         arrayOf(identity.eventId.toString(), calendarId, identity.originalId,
-                            identity.originalInstanceTime.toString()))
+                            identity.originalInstanceTime.toString(), if (identity.isDeleted) "1" else "0"))
                     .withValues(values).withExpectedCount(1).build())
                 replaceChildren(CalendarContract.Attendees.CONTENT_URI, CalendarContract.Attendees.EVENT_ID,
                     identity.eventId, attendees)
@@ -1494,10 +1550,11 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     identity.eventId, reminders)
             }
         }
-        if (isTestRecTitle(template.getAsString(Events.TITLE))) {
+        if (debugLoggingEnabled && isTestRecTitle(template.getAsString(Events.TITLE))) {
             Log.i(TEST_REC_TRACE_TAG, "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN exception-reset-in-place\" " +
-                "source=device_calendar updated=${resets.count { it.range != null }} " +
-                "removedSlots=${resets.count { it.range == null }}")
+                "source=device_calendar updated=${selectedResetIds.size} " +
+                "restored=${identities.count { it.isDeleted && it.eventId in selectedResetIds }} " +
+                "removedSlots=${identities.zip(resets).count { !it.first.isDeleted && it.second.range == null }}")
         }
         return operations
     }
@@ -1541,19 +1598,22 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     private fun recurrenceExceptionIdentities(
         contentResolver: ContentResolver,
         calendarId: String,
-        masterEventId: String
+        masterEventId: String,
+        includeDeleted: Boolean = false
     ): List<StoredRecurrenceExceptionIdentity> {
         val resetQuery = recurrenceExceptionResetQuery(
             calendarId = calendarId,
             masterEventId = masterEventId,
             masterSyncId = masterEventId.toLongOrNull()?.let {
                 queryMasterSyncId(contentResolver, it)
-            }
+            },
+            includeDeleted = includeDeleted
         )
         val identities = mutableListOf<StoredRecurrenceExceptionIdentity>()
         contentResolver.query(
             Events.CONTENT_URI,
-            arrayOf(Events._ID, Events.ORIGINAL_ID, Events.ORIGINAL_INSTANCE_TIME),
+            arrayOf(Events._ID, Events.ORIGINAL_ID, Events.ORIGINAL_INSTANCE_TIME,
+                Events.DELETED, Events.ORIGINAL_ALL_DAY),
             resetQuery.selection,
             resetQuery.selectionArgs,
             null
@@ -1563,7 +1623,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     StoredRecurrenceExceptionIdentity(
                         eventId = cursor.getLong(0),
                         originalId = cursor.getString(1),
-                        originalInstanceTime = cursor.getLong(2)
+                        originalInstanceTime = cursor.getLong(2),
+                        isDeleted = cursor.getInt(3) == 1,
+                        originalAllDay = if (cursor.isNull(4)) null else cursor.getInt(4) != 0
                     )
                 )
             }
@@ -1630,6 +1692,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         calendarId: String,
         preferredMasterId: String? = null
     ) {
+        if (!debugLoggingEnabled) return
+
         val contentResolver = _context?.contentResolver ?: return
         val masters = mutableListOf<TestRecProviderRow>()
         val masterSelection = buildString {
@@ -4293,8 +4357,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             recurrence = currentRecurrence
         )
         val diagnostics = calendarRejectionDiagnostics(
-            enabled = ((_context?.applicationInfo?.flags ?: 0) and
-                android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0,
+            enabled = debugLoggingEnabled,
             titles = listOf(current.title, titleChange?.get("expected") as? String,
                 requestedTitle),
             stage = rejectionStage,
@@ -5561,7 +5624,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     private fun retrieveAttendees(
         calendar: Calendar,
         eventId: String,
-        contentResolver: ContentResolver?
+        contentResolver: ContentResolver?,
+        requireCompleteRead: Boolean = false
     ): MutableList<Attendee> {
         val attendees: MutableList<Attendee> = mutableListOf()
         val attendeesQuery = "(${CalendarContract.Attendees.EVENT_ID} = ${eventId})"
@@ -5573,6 +5637,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             null
         )
         attendeesCursor.use { cursor ->
+            if (requireCompleteRead) checkNotNull(cursor) {
+                "CalendarProvider returned no Attendees cursor"
+            }
             if (cursor?.moveToFirst() == true) {
                 do {
                     val attendee = parseAttendeeRow(calendar, attendeesCursor) ?: continue
@@ -5587,7 +5654,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     @SuppressLint("MissingPermission")
     private fun retrieveReminders(
         eventId: String,
-        contentResolver: ContentResolver?
+        contentResolver: ContentResolver?,
+        requireCompleteRead: Boolean = false
     ): MutableList<Reminder> {
         val reminders: MutableList<Reminder> = mutableListOf()
         val remindersQuery = "(${CalendarContract.Reminders.EVENT_ID} = ${eventId})"
@@ -5599,6 +5667,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             null
         )
         remindersCursor.use { cursor ->
+            if (requireCompleteRead) checkNotNull(cursor) {
+                "CalendarProvider returned no Reminders cursor"
+            }
             if (cursor?.moveToFirst() == true) {
                 do {
                     val reminder = parseReminderRow(remindersCursor) ?: continue

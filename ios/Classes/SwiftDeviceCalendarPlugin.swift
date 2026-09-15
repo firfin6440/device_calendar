@@ -328,7 +328,9 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
         let color = arguments[calendarColorArgument] as! Int
 
         guard let calendar = eventStore.calendar(withIdentifier: calendarId) else {
+#if DEBUG
             print("Calendar not found")
+#endif
             result(false)
             return
         }
@@ -950,7 +952,9 @@ public class SwiftDeviceCalendarPlugin: NSObject, FlutterPlugin, FlutterStreamHa
             if (!numberMatch.isEmpty) {
                 occurrence = Int(numberMatch)
                 if (1 > occurrence! || occurrence! > 53) {
+#if DEBUG
                     print("OCCURRENCE_ERROR: OUT OF RANGE -> \(String(describing: occurrence))")
+#endif
                 }
                 if (results![1] == "-") {
                     occurrence = -occurrence!

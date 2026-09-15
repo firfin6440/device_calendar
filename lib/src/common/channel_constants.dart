@@ -21,6 +21,8 @@ class ChannelConstants {
   static const String methodNameRetrieveCalendarColors =
       'retrieveCalendarColors';
   static const String methodNameUpdateCalendarColor = 'updateCalendarColor';
+  static const String methodNameSetDebugLoggingEnabled =
+      'setDebugLoggingEnabled';
 
   static const String parameterNameCalendarId = 'calendarId';
   static const String parameterNameStartDate = 'startDate';
@@ -43,4 +45,5 @@ class ChannelConstants {
   static const String parameterNameCalendarColorKey = 'calendarColorKey';
   static const String parameterNameLocalAccountName = 'localAccountName';
   static const String parameterAccountName = "accountName";
+  static const String parameterNameDebugLoggingEnabled = 'enabled';
 }

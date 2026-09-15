@@ -150,19 +150,22 @@ internal data class RecurrenceExceptionResetQuery(
  * sync-adapter id, so both identities must be covered. Cancellations are
  * intentionally included: resetting an entire series restores those slots
  * in place. Deleting the exception can instead cancel its occurrence.
+ * Soft-deleted rows are opt-in for explicit override reset only; ordinary
+ * live-row cleanup must not revive them or repeatedly submit their deletion.
  */
 internal fun recurrenceExceptionResetQuery(
     calendarId: String,
     masterEventId: String,
-    masterSyncId: String?
+    masterSyncId: String?,
+    includeDeleted: Boolean = false
 ): RecurrenceExceptionResetQuery {
     val originalIds = listOfNotNull(masterEventId, masterSyncId).distinct()
     val placeholders = originalIds.joinToString(",") { "?" }
     return RecurrenceExceptionResetQuery(
         selection = "${Events.CALENDAR_ID} = ? AND ${Events._ID} != ? AND " +
             "${Events.ORIGINAL_ID} IN ($placeholders) AND " +
-            "${Events.ORIGINAL_INSTANCE_TIME} IS NOT NULL AND " +
-            "${Events.DELETED} != 1",
+            "${Events.ORIGINAL_INSTANCE_TIME} IS NOT NULL" +
+            (if (includeDeleted) "" else " AND ${Events.DELETED} != 1"),
         selectionArgs =
             (listOf(calendarId, masterEventId) + originalIds).toTypedArray()
     )

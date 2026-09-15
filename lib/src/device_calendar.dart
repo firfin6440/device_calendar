@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:device_calendar/device_calendar.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:timezone/data/latest.dart' as tz;
@@ -20,6 +21,8 @@ class DeviceCalendarPlugin {
       EventChannel(ChannelConstants.calendarChangesChannelName);
 
   static Stream<void>? _calendarChanges;
+  static Future<void>? _nativeDebugLoggingConfiguration;
+  static bool _nativeDebugLoggingConfigured = false;
 
   /// Emits whenever the platform calendar store reports a change.
   ///
@@ -39,6 +42,29 @@ class DeviceCalendarPlugin {
 
   @visibleForTesting
   DeviceCalendarPlugin.private();
+
+  Future<void> _ensureNativeDebugLoggingConfigured() async {
+    if (!Platform.isAndroid || _nativeDebugLoggingConfigured) return;
+
+    final Future<void> configuration =
+        _nativeDebugLoggingConfiguration ??= channel.invokeMethod<void>(
+      ChannelConstants.methodNameSetDebugLoggingEnabled,
+      <String, bool>{
+        ChannelConstants.parameterNameDebugLoggingEnabled: kDebugMode,
+      },
+    );
+    try {
+      await configuration;
+      _nativeDebugLoggingConfigured = true;
+    } catch (error) {
+      if (identical(_nativeDebugLoggingConfiguration, configuration)) {
+        _nativeDebugLoggingConfiguration = null;
+      }
+      if (kDebugMode) {
+        debugPrint('Could not configure native calendar diagnostics: $error');
+      }
+    }
+  }
 
   /// Requests permissions to modify the calendars on the device
   ///
@@ -731,6 +757,10 @@ class DeviceCalendarPlugin {
         }
       }
 
+      if (Platform.isAndroid && !_nativeDebugLoggingConfigured) {
+        await _ensureNativeDebugLoggingConfigured();
+      }
+
       var rawData = await channel.invokeMethod(
         channelMethodName,
         arguments != null ? arguments() : null,
@@ -742,11 +772,13 @@ class DeviceCalendarPlugin {
         result.data = rawData;
       }
     } catch (e, s) {
-      if (e is ArgumentError) {
+      if (kDebugMode && e is ArgumentError) {
         debugPrint(
             "INVOKE_CHANNEL_METHOD_ERROR! Name: ${e.name}, InvalidValue: ${e.invalidValue}, Message: ${e.message}, ${e.toString()}");
       }
-      debugPrint('INVOKE_CHANNEL_METHOD_ERROR: $e\n$s');
+      if (kDebugMode) {
+        debugPrint('INVOKE_CHANNEL_METHOD_ERROR: $e\n$s');
+      }
       _parsePlatformExceptionAndUpdateResult<T>(
         e is Exception ? e : Exception(e.toString()),
         result,
@@ -768,7 +800,7 @@ class DeviceCalendarPlugin {
       return;
     }
 
-    debugPrint('$exception');
+    if (kDebugMode) debugPrint('$exception');
 
     if (exception is PlatformException) {
       final int errorCode =
@@ -795,7 +827,7 @@ class DeviceCalendarPlugin {
     int errorCode,
     String errorMessage,
   ) {
-    if (result.data != null) {
+    if (kDebugMode && result.data != null) {
       debugPrint("RESULT of _assertParameter: ${result.data}");
     }
     if (!predicate) {

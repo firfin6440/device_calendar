@@ -1,7 +1,6 @@
 package com.builttoroam.devicecalendar
 
 import android.content.OperationApplicationException
-import android.content.pm.ApplicationInfo
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,8 +47,9 @@ class CalendarRejectionDiagnosticsTest {
     private fun response(debug: Boolean, failure: Exception? = null,
                          alreadyCurrent: Boolean = false): Map<String, Any?> {
         val app = RuntimeEnvironment.getApplication()
-        app.applicationInfo.flags = if (debug) ApplicationInfo.FLAG_DEBUGGABLE else 0
-        val delegate = CalendarDelegate(null, app)
+        val delegate = CalendarDelegate(null, app).also {
+            it.debugLoggingEnabled = debug
+        }
         val stored = CalendarDelegate::class.java.declaredClasses.single {
             it.simpleName == "StoredEventChangeValues"
         }.declaredConstructors.single().apply { isAccessible = true }.newInstance(

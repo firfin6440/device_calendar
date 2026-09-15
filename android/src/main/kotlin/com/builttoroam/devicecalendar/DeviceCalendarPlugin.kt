@@ -27,6 +27,8 @@ private const val RETRIEVE_EVENT_METHOD = "retrieveEvent"
 private const val RETRIEVE_MASTER_EVENT_METHOD = "retrieveMasterEvent"
 private const val UPDATE_ATTENDEE_STATUS_METHOD = "updateAttendeeStatus"
 private const val APPLY_EVENT_CHANGES_METHOD = "applyEventChanges"
+private const val SET_DEBUG_LOGGING_ENABLED_METHOD = "setDebugLoggingEnabled"
+private const val DEBUG_LOGGING_ENABLED_ARGUMENT = "enabled"
 private const val DELETE_EVENT_METHOD = "deleteEvent"
 private const val DELETE_EVENT_INSTANCE_METHOD = "deleteEventInstance"
 private const val CREATE_OR_UPDATE_EVENT_METHOD = "createOrUpdateEvent"
@@ -101,6 +103,12 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
     private lateinit var _calendarDelegate: CalendarDelegate
     private var calendarChangesSink: EventChannel.EventSink? = null
     private var calendarContentObserver: ContentObserver? = null
+    private var debugLoggingEnabled = false
+
+    private fun newCalendarDelegate(binding: ActivityPluginBinding?): CalendarDelegate =
+        CalendarDelegate(binding, context!!).also {
+            it.debugLoggingEnabled = debugLoggingEnabled
+        }
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         context = flutterPluginBinding.applicationContext
@@ -114,7 +122,7 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
             "plugins.builttoroam.com/device_calendar/calendar_changes"
         )
         calendarChangesChannel.setStreamHandler(this)
-        _calendarDelegate = CalendarDelegate(null, context!!)
+        _calendarDelegate = newCalendarDelegate(null)
     }
 
     override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
@@ -165,7 +173,7 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activity = binding.activity
-        _calendarDelegate = CalendarDelegate(binding, context!!)
+        _calendarDelegate = newCalendarDelegate(binding)
         binding.addRequestPermissionsResultListener(_calendarDelegate)
     }
 
@@ -185,6 +193,12 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            SET_DEBUG_LOGGING_ENABLED_METHOD -> {
+                debugLoggingEnabled =
+                    call.argument<Boolean>(DEBUG_LOGGING_ENABLED_ARGUMENT) == true
+                _calendarDelegate.debugLoggingEnabled = debugLoggingEnabled
+                result.success(null)
+            }
             REQUEST_PERMISSIONS_METHOD -> {
                 _calendarDelegate.requestPermissions(result)
             }
