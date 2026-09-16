@@ -326,8 +326,7 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
                 }
                 val newColorKey  = (call.argument<Number>(CALENDAR_COLOR_KEY_ARGUMENT))?.toInt()
                 val newColor  = (call.argument<Number>(CALENDAR_COLOR_ARGUMENT))?.toInt()
-                val success = _calendarDelegate.updateCalendarColor(calendarId, newColorKey, newColor)
-                result.success(success)
+                _calendarDelegate.updateCalendarColor(calendarId, newColorKey, newColor, result)
             }
             else -> {
                 result.notImplemented()

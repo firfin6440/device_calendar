@@ -50,7 +50,9 @@ android {
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+    // Let the applied Kotlin plugin select its matching stdlib. The host can
+    // supply a newer compiler than this module's standalone buildscript;
+    // pinning 1.8 here left native tests missing generated coroutine helpers.
     implementation 'com.google.code.gson:gson:2.8.8'
     api 'androidx.appcompat:appcompat:1.3.1'
     implementation 'org.dmfs:lib-recur:0.12.2'

@@ -281,6 +281,224 @@ class CalendarRangeReadThreadingTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun directEventsQueryCannotBlockMain() = directHeartbeat("events")
+    @Test fun directCalendarQueryCannotBlockMain() = directHeartbeat("calendars")
+    private fun directHeartbeat(path: String) {
+        provider.gatePath = path
+        val reply = direct()
+        assertTrue(provider.entered.await(5, TimeUnit.SECONDS))
+        try {
+            var ran = false
+            Handler(Looper.getMainLooper()).post { ran = true }
+            shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(ran); assertTrue(reply.results.isEmpty())
+        } finally { provider.resume.countDown() }
+        await(reply); assertNull(reply.single().error); assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directPipelinePreservesRowAndSerializesOffMain() {
+        val delegate = CalendarDelegate(null, app)
+        val serialization = CopyOnWriteArrayList<Boolean>()
+        observeSerialization(delegate) { serialization.add(mainThread()) }
+        val reply = direct(delegate = delegate); await(reply)
+        assertNull(reply.single().error)
+        val row = JsonParser.parseString(reply.single().value as String).asJsonObject
+        assertEquals("701", row["eventId"].asString)
+        assertEquals("7", row["calendarId"].asString)
+        assertEquals(slot - 86400000, row["eventStartDate"].asLong)
+        assertEquals("Europe/London", row["eventStartTimeZone"].asString)
+        assertEquals("remote-701", row["syncId"].asString)
+        assertEquals(1, row["attendees"].asJsonArray.size())
+        assertEquals(1, row["reminders"].asJsonArray.size())
+        assertEquals(listOf(false), serialization.toList())
+        val query = provider.queries.first()
+        assertEquals("701", query.uri.lastPathSegment)
+        assertEquals(Constants.MASTER_EVENT_PROJECTION.toList(), query.projection)
+        assertNull(query.selection); assertNull(query.args); assertNull(query.sort)
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directQueryEventsFailure() = directFailure("query:events")
+    @Test fun directQueryCalendarFailure() = directFailure("query:calendars")
+    @Test fun directQueryAttendeesFailure() = directFailure("query:attendees")
+    @Test fun directQueryRemindersFailure() = directFailure("query:reminders")
+    @Test fun directReadEventsFailure() = directFailure("read:events")
+    @Test fun directReadCalendarFailure() = directFailure("read:calendars")
+    @Test fun directReadAttendeesFailure() = directFailure("read:attendees")
+    @Test fun directReadRemindersFailure() = directFailure("read:reminders")
+    @Test fun directCloseEventsFailure() = directFailure("close:events")
+    @Test fun directCloseCalendarFailure() = directFailure("close:calendars")
+    @Test fun directCloseAttendeesFailure() = directFailure("close:attendees")
+    @Test fun directCloseRemindersFailure() = directFailure("close:reminders")
+    private fun directFailure(point: String) {
+        provider.failAt = point
+        val reply = direct(); await(reply)
+        assertEquals("500", reply.single().error)
+        assertTrue(reply.single().message.orEmpty().contains(point))
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directNullEventsIsNot404() = directNull("events")
+    @Test fun directNullCalendarIsNot404() = directNull("calendars")
+    @Test fun directNullAttendeesIsNotEmptySuccess() = directNull("attendees")
+    @Test fun directNullRemindersIsNotEmptySuccess() = directNull("reminders")
+    private fun directNull(path: String) {
+        provider.nullPath = path
+        val reply = direct(); await(reply)
+        assertEquals("500", reply.single().error); assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directAbsentEventKeeps404() = directMissing("events")
+    @Test fun directAbsentCalendarKeeps404() = directMissing("calendars")
+    private fun directMissing(path: String) {
+        provider.emptyPath = path
+        val reply = direct(); await(reply)
+        assertEquals("404", reply.single().error); assertAllWorkOffMainAndClosed()
+        assertFalse(provider.queries.any { it.path == "attendees" })
+    }
+    @Test fun directWrongCalendarDoesNotReadChildren() {
+        val reply = direct(calendar = "8"); await(reply)
+        assertEquals("404", reply.single().error)
+        assertEquals(listOf("events"), provider.queries.map { it.path })
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directInvalidIdDoesNotQuery() {
+        val reply = direct(id = "invalid"); await(reply)
+        assertEquals("400", reply.single().error); assertTrue(provider.queries.isEmpty())
+    }
+    @Test fun directMasterAliasUsesOffMainPipeline() {
+        val reply = Reply().also { replies.add(it) }
+        CalendarDelegate(null, app).retrieveMasterEvent("7", "701", reply)
+        await(reply); assertNull(reply.single().error); assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directSerializationErrorRepliesOnceAfterCleanup() {
+        val delegate = CalendarDelegate(null, app)
+        observeSerialization(delegate) { throw IllegalStateException("gson") }
+        val reply = direct(delegate = delegate); await(reply)
+        assertEquals("500", reply.single().error); assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directRevokedPermissionIsError() {
+        provider.revoke = true
+        val reply = direct(); await(reply)
+        assertEquals("500", reply.single().error); assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directOverlapsRangeWithoutSharingReplies() = directOverlap(false)
+    @Test fun directFailureDoesNotPoisonConcurrentRange() = directOverlap(true)
+    private fun directOverlap(failFirst: Boolean) {
+        provider.gatePath = "events"
+        val delegate = CalendarDelegate(null, app)
+        val first = direct(delegate = delegate)
+        assertTrue(provider.entered.await(5, TimeUnit.SECONDS))
+        try {
+            val second = read(delegate = delegate, calendar = "8"); await(second)
+            assertNull(second.single().error); assertTrue(first.results.isEmpty())
+            if (failFirst) provider.failAfterGate = true
+        } finally { provider.resume.countDown() }
+        await(first)
+        assertEquals(if (failFirst) "500" else null, first.single().error)
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun directPermissionDeniedDoesNotQuery() = directPermission(false)
+    @Test fun directPermissionGrantRetainsId() = directPermission(true)
+    private fun directPermission(granted: Boolean) {
+        shadowOf(app).denyPermissions(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            val activity = controller.get()
+            val binding = Proxy.newProxyInstance(ActivityPluginBinding::class.java.classLoader,
+                arrayOf(ActivityPluginBinding::class.java)) { _, method, _ ->
+                if (method.name == "getActivity") activity else error(method.name)
+            } as ActivityPluginBinding
+            val delegate = CalendarDelegate(binding, app)
+            val reply = direct(delegate = delegate)
+            val request = shadowOf(activity).lastRequestedPermission!!
+            assertTrue(provider.queries.isEmpty()); assertTrue(reply.results.isEmpty())
+            if (granted) shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+            delegate.onRequestPermissionsResult(request.requestCode, request.requestedPermissions,
+                intArrayOf(if (granted) PackageManager.PERMISSION_GRANTED else PackageManager.PERMISSION_DENIED))
+            await(reply)
+            if (!granted) {
+                assertEquals("401", reply.single().error); assertTrue(provider.queries.isEmpty())
+            } else {
+                assertNull(reply.single().error)
+                assertEquals("701", provider.queries.first().uri.lastPathSegment)
+                assertAllWorkOffMainAndClosed()
+            }
+        } finally { controller.pause().stop().destroy() }
+    }
+    private fun direct(delegate: CalendarDelegate = CalendarDelegate(null, app),
+                       calendar: String = "7", id: String = "701"): Reply =
+        Reply().also { replies.add(it); delegate.retrieveEvent(calendar, id, it) }
+
+    @Test fun oneOccurrenceReadsOneChildPair() = sharedChildren(1)
+    @Test fun fiveOccurrencesReadOneChildPair() = sharedChildren(5)
+    @Test fun hundredOccurrencesReadOneChildPair() = sharedChildren(100)
+    private fun sharedChildren(count: Int) {
+        provider.instanceIds = List(count) { 701L }
+        val reply = read(); await(reply)
+        assertNull(reply.single().error)
+        val rows = JsonParser.parseString(reply.single().value as String).asJsonArray
+        assertEquals(count, rows.size())
+        assertEquals(count, rows.map { it.asJsonObject["eventStartDate"].asLong }.distinct().size)
+        assertEquals(4, provider.queries.size) // Calendar + Instances + one child pair.
+        assertEquals(1, provider.queries.count { it.path == "attendees" })
+        assertEquals(1, provider.queries.count { it.path == "reminders" })
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun detachedAndUnrelatedRowsDoNotShareChildrenByTitleOrTime() {
+        provider.instanceIds = listOf(701L, 702L, 701L, 703L, 702L)
+        provider.childrenById = true
+        val reply = read(); await(reply)
+        val rows = JsonParser.parseString(reply.single().value as String).asJsonArray
+        assertEquals(5, rows.size())
+        rows.forEach { value ->
+            val row = value.asJsonObject
+            val id = row["eventId"].asInt
+            assertEquals(id, row["reminders"].asJsonArray[0].asJsonObject["minutes"].asInt)
+        }
+        assertEquals(3, provider.queries.count { it.path == "attendees" })
+        assertEquals(3, provider.queries.count { it.path == "reminders" })
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun emptyChildrenAreAlsoReusedWithinRead() {
+        provider.instanceIds = List(5) { 701L }; provider.emptyPath = "attendees"
+        val reply = read(); await(reply)
+        val rows = JsonParser.parseString(reply.single().value as String).asJsonArray
+        assertTrue(rows.all { it.asJsonObject["attendees"].asJsonArray.size() == 0 })
+        assertEquals(1, provider.queries.count { it.path == "attendees" })
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun childReuseDoesNotSurviveRequestOrCalendar() {
+        provider.instanceIds = List(5) { 701L }
+        val first = read(); await(first)
+        provider.reminderMinutes = 30
+        val second = read(); await(second)
+        val other = read(calendar = "8"); await(other)
+        assertEquals(3, provider.queries.count { it.path == "reminders" })
+        for ((reply, expected) in listOf(first to 10, second to 30, other to 30)) {
+            val rows = JsonParser.parseString(reply.single().value as String).asJsonArray
+            assertTrue(rows.all { it.asJsonObject["reminders"].asJsonArray[0].asJsonObject["minutes"].asInt == expected })
+        }
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun failedChildReadDoesNotPoisonNextRequest() {
+        provider.instanceIds = List(5) { 701L }; provider.failAt = "query:reminders"
+        val first = read(); await(first); assertEquals("500", first.single().error)
+        provider.failAt = null; provider.reminderMinutes = 30
+        val second = read(); await(second); assertNull(second.single().error)
+        assertEquals(2, provider.queries.count { it.path == "reminders" })
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun cachedRawAttendeesAreNormalizedForEachOccurrence() {
+        provider.instanceIds = List(3) { 701L }; provider.ownerStatuses = listOf(1, 4)
+        provider.instanceStatuses = listOf(4, 1, 4)
+        val reply = read(); await(reply)
+        val rows = JsonParser.parseString(reply.single().value as String).asJsonArray
+        assertEquals(listOf(4, 1, 4), rows.map {
+            val attendees = it.asJsonObject["attendees"].asJsonArray
+            assertEquals(1, attendees.size())
+            attendees[0].asJsonObject["attendanceStatus"].asInt
+        })
+        assertEquals(1, provider.queries.count { it.path == "attendees" })
+        assertAllWorkOffMainAndClosed()
+    }
+
     private data class Result(val value: Any?, val error: String?, val message: String?)
     private inner class Reply : MethodChannel.Result {
         val results = CopyOnWriteArrayList<Result>()
@@ -336,6 +554,11 @@ class CalendarRangeReadThreadingTest {
         val queries = CopyOnWriteArrayList<Query>()
         val threads = CopyOnWriteArrayList<Pair<String, Boolean>>()
         val cursors = CopyOnWriteArrayList<TrackedCursor>()
+        var instanceIds: List<Long>? = null
+        var instanceStatuses: List<Int>? = null
+        var ownerStatuses = listOf(4)
+        var reminderMinutes = 10
+        var childrenById = false
         var failAt: String? = null
         var nullPath: String? = null
         var emptyPath: String? = null
@@ -362,25 +585,37 @@ class CalendarRangeReadThreadingTest {
                 if (failAfterGate) throw IllegalStateException("held-query-failed")
             }
             if (failAt == "query:$path") throw IllegalStateException(failAt)
-            if (revoke && path == "instances") throw SecurityException("calendar permission revoked")
+            if (revoke && path in setOf("instances", "events")) throw SecurityException("calendar permission revoked")
             if (nullPath == path) return null
             val matrix = MatrixCursor(projection)
             if (emptyPath != path) {
+                val count = when (path) {
+                    "instances" -> instanceIds?.size ?: 1
+                    "attendees" -> ownerStatuses.size
+                    else -> 1
+                }
+                for (index in 0 until count) {
                 val values: Map<String, Any?> = when (path) {
                     "calendars" -> mapOf("_id" to calendar.toLong(), "calendar_displayName" to "Work",
                         "account_name" to "me@example.com", "ownerAccount" to "me@example.com",
                         "account_type" to "com.google", "calendar_access_level" to 700, "calendar_color" to 0)
-                    "instances" -> mapOf("event_id" to 701L, "title" to "ordinary fixture",
-                        "begin" to slot, "end" to slot + 3600000, "eventTimezone" to "Europe/London",
-                        "eventEndTimezone" to "Europe/London", "original_id" to 700L,
-                        "originalInstanceTime" to slot, "_sync_id" to "remote-701",
+                    "instances" -> mapOf("event_id" to (instanceIds?.get(index) ?: 701L), "title" to "ordinary fixture",
+                        "begin" to slot + index * 86400000L, "end" to slot + index * 86400000L + 3600000, "eventTimezone" to "Europe/London",
+                        "eventEndTimezone" to "Europe/London", "original_id" to (if (instanceIds == null) 700L else if (instanceIds!![index] == 702L) 701L else null),
+                        "originalInstanceTime" to (if (instanceIds == null || instanceIds!![index] == 702L) slot else null), "_sync_id" to "remote-701",
+                        "selfAttendeeStatus" to (instanceStatuses?.get(index) ?: 4), "rrule" to "FREQ=DAILY;COUNT=3")
+                    "events" -> mapOf("_id" to uri.lastPathSegment!!.toLong(), "calendar_id" to 7L,
+                        "title" to "ordinary fixture", "dtstart" to slot - 86400000,
+                        "dtend" to slot - 82800000, "eventTimezone" to "Europe/London",
+                        "eventEndTimezone" to "Europe/London", "_sync_id" to "remote-701",
                         "selfAttendeeStatus" to 4, "rrule" to "FREQ=DAILY;COUNT=3")
                     "attendees" -> mapOf("attendeeName" to "Me", "attendeeEmail" to "me@example.com",
-                        "attendeeType" to 1, "attendeeStatus" to 4, "attendeeRelationship" to 2)
-                    "reminders" -> mapOf("minutes" to 10, "method" to 1)
+                        "attendeeType" to 1, "attendeeStatus" to ownerStatuses[index], "attendeeRelationship" to 2)
+                    "reminders" -> mapOf("minutes" to (if (childrenById) selection!!.substringAfter("= ").substringBefore(")").toInt() else reminderMinutes), "method" to 1)
                     else -> error("Unexpected provider query: $uri")
                 }
                 matrix.addRow(projection.map { values[it] }.toTypedArray())
+                }
             }
             return TrackedCursor(path, matrix).also { cursors.add(it) }
         }

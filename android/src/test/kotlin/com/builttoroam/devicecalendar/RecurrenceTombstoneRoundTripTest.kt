@@ -298,7 +298,7 @@ class RecurrenceTombstoneRoundTripTest {
  * The connected Samsung's raw rows/Instances independently confirm this case.
  * This is not a replacement for a full CalendarProvider/cloud-sync emulator.
  */
-private class TombstoneCalendarProvider : ContentProvider() {
+internal open class TombstoneCalendarProvider : ContentProvider() {
     lateinit var db: SQLiteDatabase
     var beforeBatch: (() -> Unit)? = null
     override fun onCreate(): Boolean {
