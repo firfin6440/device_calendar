@@ -193,6 +193,11 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "recentRecurrenceClock", "readRecurrenceRepairSnapshot", "repairRecurrencePrefix" -> {
+                val currentContext = context
+                if (currentContext == null) result.error("PLUGIN_DETACHED", "Calendar plugin detached", null)
+                else RecentRecurrenceRepair.handle(currentContext, call, result, debugLoggingEnabled)
+            }
             SET_DEBUG_LOGGING_ENABLED_METHOD -> {
                 debugLoggingEnabled =
                     call.argument<Boolean>(DEBUG_LOGGING_ENABLED_ARGUMENT) == true
