@@ -21,8 +21,9 @@ class DeviceCalendarPlugin {
       EventChannel(ChannelConstants.calendarChangesChannelName);
 
   static Stream<void>? _calendarChanges;
-  static Future<void>? _nativeDebugLoggingConfiguration;
-  static bool _nativeDebugLoggingConfigured = false;
+  Future<void>? _nativeDebugLoggingConfiguration;
+  bool _nativeDebugLoggingConfigured = false;
+  final MethodChannel _methodChannel;
 
   /// Emits whenever the platform calendar store reports a change.
   ///
@@ -41,13 +42,19 @@ class DeviceCalendarPlugin {
   }
 
   @visibleForTesting
-  DeviceCalendarPlugin.private();
+  DeviceCalendarPlugin.private() : _methodChannel = channel;
+
+  /// Reuse the exact codecs/error mapping with an explicitly owned transport.
+  /// The host owns lifetime/recovery. This does not alter the default singleton,
+  /// initialize timezones or request calendar permission automatically.
+  DeviceCalendarPlugin.withMethodChannel(MethodChannel methodChannel)
+      : _methodChannel = methodChannel;
 
   Future<void> _ensureNativeDebugLoggingConfigured() async {
     if (!Platform.isAndroid || _nativeDebugLoggingConfigured) return;
 
     final Future<void> configuration =
-        _nativeDebugLoggingConfiguration ??= channel.invokeMethod<void>(
+        _nativeDebugLoggingConfiguration ??= _methodChannel.invokeMethod<void>(
       ChannelConstants.methodNameSetDebugLoggingEnabled,
       <String, bool>{
         ChannelConstants.parameterNameDebugLoggingEnabled: kDebugMode,
@@ -761,7 +768,7 @@ class DeviceCalendarPlugin {
         await _ensureNativeDebugLoggingConfigured();
       }
 
-      var rawData = await channel.invokeMethod(
+      var rawData = await _methodChannel.invokeMethod(
         channelMethodName,
         arguments != null ? arguments() : null,
       );

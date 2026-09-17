@@ -51,6 +51,9 @@ internal class CalendarWriteLane(private val executor: Executor) {
         try {
             executor.execute {
                 try {
+                    // The owning runtime can retire while this request waits
+                    // behind another Binder operation on the serial lane.
+                    (result as? CalendarInvocationFence)?.checkCalendarInvocation()
                     operation(completion)
                 } catch (failure: Throwable) {
                     // This may be AFTER a commit. Never invent rollback proof

@@ -438,6 +438,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             // joins writes admitted by its predecessor; ordinary reads stay IO.
             GlobalScope.launch(Dispatchers.IO + exceptionHandler) {
                 awaitInheritedWrites()
+                (pendingChannelResult as? CalendarInvocationFence)?.checkCalendarInvocation()
                 // The old retrieveCalendar helper owns replies/permission-cache
                 // mutation. It must not be called from this worker.
                 val calendar = readCalendarForEventRange(calendarId, contentResolver)
@@ -590,6 +591,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         // complete execution (including serialization and cleanup) off main.
         GlobalScope.launch(Dispatchers.IO + exceptionHandler) {
             awaitInheritedWrites()
+            (pendingChannelResult as? CalendarInvocationFence)?.checkCalendarInvocation()
             val event = contentResolver?.query(
                 eventUri, Cst.MASTER_EVENT_PROJECTION, null, null, null
             ).use { cursor ->
