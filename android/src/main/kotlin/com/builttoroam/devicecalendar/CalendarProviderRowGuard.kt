@@ -22,7 +22,14 @@ internal fun calendarProviderRowGuard(
         CalendarContract.Events.CONTENT_URI -> CalendarContract.Events._ID
         else -> error("Unsupported calendar guard URI: $uri")
     }
+    val predicates = mutableListOf("$rowIdColumn = ?", "($selection)")
+    val args = mutableListOf(rowId, *selectionArgs)
+    val guardedValues = ContentValues(values)
+    if (uri == CalendarContract.Events.CONTENT_URI && values.containsKey(CalendarContract.Events.RRULE)) {
+        RecurrenceRuleStorageGuard.append(predicates, args, values.getAsString(CalendarContract.Events.RRULE))
+        guardedValues.remove(CalendarContract.Events.RRULE)
+    }
     return ContentProviderOperation.newAssertQuery(uri)
-        .withSelection("$rowIdColumn = ? AND ($selection)", arrayOf(rowId, *selectionArgs))
-        .withValues(values).withExpectedCount(1).build()
+        .withSelection(predicates.joinToString(" AND "), args.toTypedArray())
+        .withValues(guardedValues).withExpectedCount(1).build()
 }

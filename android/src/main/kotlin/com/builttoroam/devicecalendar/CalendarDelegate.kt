@@ -1496,7 +1496,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             storedZone != originalRange.startTimeZone ||
             (template.getAsString(Events.EVENT_END_TIMEZONE) ?: storedZone) != originalRange.endTimeZone ||
             (template.getAsInteger(Events.ALL_DAY) != 0) != originalRange.allDay ||
-            template.getAsString(Events.RRULE) != originalRule) {
+            !RecurrenceRuleStorageGuard.equivalent(template.getAsString(Events.RRULE), originalRule)) {
             throw android.content.OperationApplicationException("Series changed during reset planning")
         }
         template.putAll(masterChanges)
@@ -2081,12 +2081,13 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
 
         val operations = ArrayList<ContentProviderOperation>()
+        val recurrenceGuard = RecurrenceRuleStorageGuard.selection(currentMaster.recurrenceRule)
         operations.add(
             ContentProviderOperation.newDelete(Events.CONTENT_URI)
                 .withSelection(
                     "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
-                        "${Events.RRULE} = ? AND ${Events.DELETED} != 1",
-                    arrayOf(masterEventId, calendarId, currentMaster.recurrenceRule)
+                        "${recurrenceGuard.sql} AND ${Events.DELETED} != 1",
+                    (listOf(masterEventId, calendarId) + recurrenceGuard.args).toTypedArray()
                 )
                 .withExpectedCount(1)
                 .build()
@@ -2622,12 +2623,13 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 expectedAttendees!!
             )
         }
+        val recurrenceGuard = RecurrenceRuleStorageGuard.selection(rawRule)
         operations.add(
             ContentProviderOperation.newUpdate(Events.CONTENT_URI)
                 .withSelection(
                     "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
-                        "${Events.RRULE} = ? AND ${Events.DELETED} != 1",
-                    arrayOf(masterEventId, calendarId, rawRule)
+                        "${recurrenceGuard.sql} AND ${Events.DELETED} != 1",
+                    (listOf(masterEventId, calendarId) + recurrenceGuard.args).toTypedArray()
                 )
                 .withValue(Events.RRULE, oldRule.toString())
                 .withExpectedCount(1)
@@ -3753,14 +3755,13 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val masterSelectionParts = mutableListOf(
             "${Events._ID} = ?",
             "${Events.CALENDAR_ID} = ?",
-            "${Events.DELETED} != 1",
-            "${Events.RRULE} = ?"
+            "${Events.DELETED} != 1"
         )
         val masterSelectionArgs = mutableListOf(
             masterEventId,
-            calendarId,
-            currentMaster.recurrenceRule!!
+            calendarId
         )
+        RecurrenceRuleStorageGuard.append(masterSelectionParts, masterSelectionArgs, currentMaster.recurrenceRule)
         if (colorChange != null) {
             if (expectedColorValue == null) {
                 masterSelectionParts.add(
@@ -4321,6 +4322,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         column: String,
         value: Any?
     ) {
+        if (column == Events.RRULE) {
+            RecurrenceRuleStorageGuard.append(selectionParts, selectionArgs, value as String?)
+            return
+        }
         if (value == null) {
             selectionParts.add("$column IS NULL")
         } else {
