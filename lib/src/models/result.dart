@@ -22,6 +22,10 @@ class Result<T> {
   }
 
   T? data;
+  /// False when a collection read contains valid rows but one or more
+  /// independent provider rows could not be read. Never use it as absence
+  /// proof or a complete collection replacement.
+  bool isComplete = true;
   List<ResultError> errors = <ResultError>[];
 }
 

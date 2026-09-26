@@ -193,6 +193,11 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "getSplitDtstartOmissionForTesting", "setSplitDtstartOmissionForTesting" -> {
+                val currentContext = context
+                if (currentContext == null) result.error("PLUGIN_DETACHED", "Calendar plugin detached", null)
+                else CalendarSplitDebugOptions.handle(currentContext, call, result)
+            }
             "recentRecurrenceClock", "readRecurrenceRepairSnapshot", "repairRecurrencePrefix" -> {
                 val currentContext = context
                 if (currentContext == null) result.error("PLUGIN_DETACHED", "Calendar plugin detached", null)

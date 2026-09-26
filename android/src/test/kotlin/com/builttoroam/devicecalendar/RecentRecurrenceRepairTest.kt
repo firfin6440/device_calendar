@@ -38,6 +38,42 @@ class RecentRecurrenceRepairTest {
     private fun repair(rows: List<Map<String, String?>>) = RecentRecurrenceRepair.apply(
         resolver, "7", listOf("21096", "900"), rows, "21096", "FREQ=DAILY;COUNT=1", "test-action:2")
 
+    @Test fun recurrenceCreationSyncBackRestoresMinimalStorageOnceWithGuards() {
+        provider.db.execSQL("DELETE FROM Events WHERE _id!=21096")
+        provider.db.execSQL("UPDATE Events SET rrule=NULL,duration=NULL,dtend=dtstart+3600000 WHERE _id=21096")
+        val rows = RecentRecurrenceRepair.read(resolver, "7", listOf("21096"))
+        assertTrue(RecentRecurrenceRepair.apply(resolver, "7", listOf("21096"), rows,
+            "21096", "FREQ=DAILY;COUNT=7", "create-action:1", false, "recurrence-creation"))
+        assertEquals("FREQ=DAILY;COUNT=7", provider.row(21096)!!.getAsString(Events.RRULE))
+        assertNull(provider.row(21096)!!.getAsString(Events.DTEND))
+        assertNull(provider.row(21096)!!.getAsString(Events.EVENT_END_TIMEZONE))
+        assertEquals("P3600S", provider.row(21096)!!.getAsString(Events.DURATION))
+        assertFalse(RecentRecurrenceRepair.apply(resolver, "7", listOf("21096"), rows,
+            "21096", "FREQ=DAILY;COUNT=7", "create-action:1", false, "recurrence-creation"))
+        assertEquals(1, ShadowLog.getLogsForTag("KeepCalSyncRepair").size)
+    }
+
+    @Test fun recurrenceCreationRepairRefusesConcurrentStructuralChange() {
+        provider.db.execSQL("DELETE FROM Events WHERE _id!=21096")
+        provider.db.execSQL("UPDATE Events SET rrule=NULL,duration=NULL,dtend=dtstart+3600000 WHERE _id=21096")
+        val rows = RecentRecurrenceRepair.read(resolver, "7", listOf("21096"))
+        provider.beforeBatch = { provider.db.execSQL("UPDATE Events SET dtstart=dtstart+3600000 WHERE _id=21096") }
+        assertFalse(RecentRecurrenceRepair.apply(resolver, "7", listOf("21096"), rows,
+            "21096", "FREQ=DAILY;COUNT=7", "create-action:2", false, "recurrence-creation"))
+        assertNull(provider.row(21096)!!.getAsString(Events.RRULE))
+        assertTrue(ShadowLog.getLogsForTag("KeepCalSyncRepair").isEmpty())
+    }
+
+    @Test fun recurrenceCreationRepairAcceptsRruleOnlyReversalWithDurationIntact() {
+        provider.db.execSQL("DELETE FROM Events WHERE _id!=21096")
+        provider.db.execSQL("UPDATE Events SET rrule=NULL,dtend=NULL,duration='P3600S',eventEndTimezone=NULL WHERE _id=21096")
+        val rows = RecentRecurrenceRepair.read(resolver, "7", listOf("21096"))
+        assertTrue(RecentRecurrenceRepair.apply(resolver, "7", listOf("21096"), rows,
+            "21096", "FREQ=DAILY;COUNT=7", "create-action:3", false, "recurrence-creation"))
+        assertEquals("FREQ=DAILY;COUNT=7", provider.row(21096)!!.getAsString(Events.RRULE))
+        assertEquals("P3600S", provider.row(21096)!!.getAsString(Events.DURATION))
+    }
+
     @Test fun appliedRepairAlwaysHasOneSmallAuditWithoutEventContent() {
         assertTrue(repair(snapshot()))
         val audit = ShadowLog.getLogsForTag("KeepCalSyncRepair").single()

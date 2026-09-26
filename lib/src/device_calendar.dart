@@ -97,14 +97,37 @@ class DeviceCalendarPlugin {
   ///
   /// Returns a [Result] containing a list of device [Calendar]
   Future<Result<UnmodifiableListView<Calendar>>> retrieveCalendars() async {
-    return _invokeChannelMethod(
+    var complete = true;
+    final result = await _invokeChannelMethod<UnmodifiableListView<Calendar>>(
       ChannelConstants.methodNameRetrieveCalendars,
-      evaluateResponse: (rawData) => UnmodifiableListView(
-        json.decode(rawData).map<Calendar>(
-              (decodedCalendar) => Calendar.fromJson(decodedCalendar),
-            ),
-      ),
+      evaluateResponse: (rawData) {
+        final decoded = json.decode(rawData);
+        final List rows;
+        if (decoded is Map) {
+          if (decoded['complete'] != false || decoded['calendars'] is! List) {
+            throw const FormatException('Invalid partial calendars reply');
+          }
+          complete = false;
+          rows = decoded['calendars'] as List;
+        } else {
+          rows = decoded as List;
+        }
+        final calendars = <Calendar>[];
+        for (final row in rows) {
+          try {
+            calendars.add(Calendar.fromJson(row as Map<String, dynamic>));
+          } on Object {
+            complete = false;
+          }
+        }
+        if (!complete && calendars.isEmpty) {
+          throw const FormatException('No usable calendar metadata');
+        }
+        return UnmodifiableListView(calendars);
+      },
     );
+    result.isComplete = complete;
+    return result;
   }
 
   /// Retrieves the events from the specified calendar
@@ -120,7 +143,9 @@ class DeviceCalendarPlugin {
     String? calendarId,
     RetrieveEventsParams? retrieveEventsParams,
   ) async {
-    return _invokeChannelMethod(ChannelConstants.methodNameRetrieveEvents,
+    var complete = true;
+    final result = await _invokeChannelMethod<UnmodifiableListView<Event>>(
+        ChannelConstants.methodNameRetrieveEvents,
         assertParameters: (result) {
           _validateCalendarIdParameter(
             result,
@@ -155,13 +180,45 @@ class DeviceCalendarPlugin {
             .decode(rawData)
             .map<Event>((decodedEvent) => Event.fromJson(decodedEvent)),
       ),*/
-        evaluateResponse: (rawData) => UnmodifiableListView(
-              json.decode(rawData).map<Event>((decodedEvent) {
-                // debugPrint(
-                //     "JSON_RRULE: ${decodedEvent['recurrenceRule']}, ${(decodedEvent['recurrenceRule']['byday'])}");
-                return Event.fromJson(decodedEvent);
-              }),
-            ));
+        evaluateResponse: (rawData) {
+          final decoded = json.decode(rawData);
+          final rows = decoded is Map
+              ? (() {
+                  if (decoded['complete'] != false ||
+                      decoded['events'] is! List) {
+                    throw const FormatException('Invalid partial range reply');
+                  }
+                  complete = false;
+                  return decoded['events'] as List;
+                })()
+              : decoded as List;
+          final parsed = <Event>[];
+          final unreadableRoots = <String>{};
+          for (final row in rows) {
+            try {
+              parsed.add(Event.fromJson(row as Map<String, dynamic>));
+            } on Object {
+              complete = false;
+              if (row is Map) {
+                final root = row['originalEventId'] ?? row['eventId'];
+                if (root is String && root.isNotEmpty) {
+                  unreadableRoots.add(root);
+                }
+              }
+            }
+          }
+          final survivors = parsed
+              .where((event) => !unreadableRoots
+                  .contains(event.originalEventId ?? event.eventId))
+              .toList(growable: false);
+          if (survivors.length != parsed.length) complete = false;
+          if (survivors.isEmpty && rows.isNotEmpty) {
+            throw const FormatException('All provider rows were unreadable');
+          }
+          return UnmodifiableListView(survivors);
+        });
+    result.isComplete = complete;
+    return result;
   }
 
   /// Retrieves one provider event directly by its stable calendar and event

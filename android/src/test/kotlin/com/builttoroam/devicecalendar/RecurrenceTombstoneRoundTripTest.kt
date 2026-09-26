@@ -354,11 +354,16 @@ internal open class TombstoneCalendarProvider : ContentProvider() {
     }
     fun row(id: Long) = rows().singleOrNull { it.getAsLong(Events._ID) == id }
     fun starts(id: Long): List<Long> {
-        expand()
+        ensureInstances()
         return db.rawQuery("SELECT begin FROM Instances INNER JOIN Events ON Events._id=Instances.event_id " +
             "WHERE event_id=? OR original_id=? ORDER BY begin",
             arrayOf(id.toString(), id.toString())).use { c -> buildList { while (c.moveToNext()) add(c.getLong(0)) } }
     }
+    // This original fixture explicitly requests a fresh expansion. The cached
+    // provider contract fixture overrides this: reading an already-expanded
+    // range must NOT repair a missing write-side invalidation.
+    protected open fun ensureInstances() = expand()
+
     private fun expand() {
         db.delete("Instances", null, null)
         val rows = rows()
@@ -412,7 +417,7 @@ internal open class TombstoneCalendarProvider : ContentProvider() {
             } }.toTypedArray())
         }
         if (uri.pathSegments.first() == "instances") {
-            expand()
+            ensureInstances()
             return SQLiteQueryBuilder().apply {
                 tables = "Instances INNER JOIN Events ON Events._id=Instances.event_id"
                 setProjectionMap(projection!!.associateWith { column -> when (column) {

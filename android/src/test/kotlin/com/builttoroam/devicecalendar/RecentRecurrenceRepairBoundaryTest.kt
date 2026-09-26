@@ -75,6 +75,29 @@ class RecentRecurrenceRepairBoundaryTest {
         RecentRecurrenceRepair.handle(app, MethodCall(method, arguments), it)
     }
 
+    @Test fun creationRepairGuardsSurvivingSplitChildAndOnlyRestoresOriginalRoot() {
+        provider.db.delete("Events", "original_id=?", arrayOf("21096"))
+        provider.db.execSQL(
+            "UPDATE Events SET rrule=NULL, dtend=dtstart+3600000, duration=NULL WHERE _id=21096")
+        val rows = snapshot()
+        assertTrue(RecentRecurrenceRepair.apply(resolver, "7", roots, rows,
+            "21096", "FREQ=DAILY;COUNT=1", kind = "recurrence-creation"))
+        assertEquals("FREQ=DAILY;COUNT=1", provider.row(21096)!!.getAsString(Events.RRULE))
+        assertEquals("FREQ=DAILY;COUNT=1;WKST=MO", provider.row(900)!!.getAsString(Events.RRULE))
+
+        seed()
+        provider.db.delete("Events", "original_id=?", arrayOf("21096"))
+        provider.db.execSQL(
+            "UPDATE Events SET rrule=NULL, dtend=dtstart+3600000, duration=NULL WHERE _id=21096")
+        val guardedRows = snapshot()
+        provider.beforeBatch = {
+            provider.db.execSQL("UPDATE Events SET rrule='FREQ=DAILY;COUNT=2' WHERE _id=900")
+        }
+        assertFalse(RecentRecurrenceRepair.apply(resolver, "7", roots, guardedRows,
+            "21096", "FREQ=DAILY;COUNT=1", kind = "recurrence-creation"))
+        assertNull(provider.row(21096)!!.getAsString(Events.RRULE))
+    }
+
     @Test fun everyStructuralColumnOnRootCompanionAndExceptionIsGuardedAtCommit() {
         val changes = mapOf(
             Events.CALENDAR_ID to "8", Events.DTSTART to "123456", Events.DTEND to "654321",

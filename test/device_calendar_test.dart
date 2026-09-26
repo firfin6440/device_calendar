@@ -95,6 +95,73 @@ void main() {
     expect(result.errors[0].errorCode, equals(ErrorCodes.invalidArguments));
   });
 
+  for (final partial in [false, true]) {
+    test(
+        'Calendar metadata decoding isolates malformed neighbour partial=$partial',
+        () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (_) async {
+        final rows = [
+          {'id': '1', 'name': 'Before', 'isReadOnly': false},
+          {
+            'id': '2',
+            'name': <String>['invalid'],
+            'isReadOnly': false
+          },
+          {'id': '3', 'name': 'After', 'isReadOnly': false},
+        ];
+        return jsonEncode(
+            partial ? {'complete': false, 'calendars': rows} : rows);
+      });
+      final result = await deviceCalendarPlugin.retrieveCalendars();
+      expect(result.isSuccess, isTrue);
+      expect(result.isComplete, isFalse);
+      expect(result.data!.map((c) => c.id), ['1', '3']);
+    });
+  }
+
+  test('RetrieveEvents_PartialReplyRetainsHealthyRowsWithoutAbsenceProof',
+      () async {
+    final healthy = Event('7', eventId: 'healthy', title: 'Healthy');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+      return jsonEncode({
+        'complete': false,
+        'events': [healthy.toJson()],
+      });
+    });
+    final result = await deviceCalendarPlugin.retrieveEvents(
+      '7',
+      RetrieveEventsParams(
+          startDate: DateTime.utc(2026, 9, 7),
+          endDate: DateTime.utc(2026, 9, 14)),
+    );
+    expect(result.isSuccess, true);
+    expect(result.isComplete, false);
+    expect(result.data!.map((event) => event.eventId), ['healthy']);
+  });
+
+  test('RetrieveEvents_OneMalformedJsonEventDoesNotHideHealthySibling',
+      () async {
+    final healthy = Event('7', eventId: 'healthy', title: 'Healthy');
+    final bad = Event('7', eventId: 'bad', title: 'Bad').toJson()
+      ..['eventStartDate'] = 'invalid';
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            channel,
+            (MethodCall methodCall) async =>
+                jsonEncode([bad, healthy.toJson()]));
+    final result = await deviceCalendarPlugin.retrieveEvents(
+      '7',
+      RetrieveEventsParams(
+          startDate: DateTime.utc(2026, 9, 7),
+          endDate: DateTime.utc(2026, 9, 14)),
+    );
+    expect(result.isSuccess, true);
+    expect(result.isComplete, false);
+    expect(result.data!.map((event) => event.eventId), ['healthy']);
+  });
+
   test('RetrieveMasterEvent_Returns_Successfully', () async {
     final masterEvent = Event(
       'fakeCalendarId',

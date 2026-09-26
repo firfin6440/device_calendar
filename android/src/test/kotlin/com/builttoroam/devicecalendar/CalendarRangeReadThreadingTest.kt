@@ -109,7 +109,15 @@ class CalendarRangeReadThreadingTest {
     @Test fun attendeeParseFailureClosesCursorsAndIsOneError() = failure("read:attendees")
     @Test fun reminderParseFailureClosesCursorsAndIsOneError() = failure("read:reminders")
     @Test fun calendarCloseFailureIsOneError() = failure("close:calendars")
-    @Test fun instancesCloseFailureIsOneError() = failure("close:instances")
+    @Test fun instancesCloseFailurePreservesReadRowsAsIncomplete() {
+        provider.failAt = "close:instances"
+        val reply = read(); await(reply)
+        assertNull(reply.single().error)
+        val partial = JsonParser.parseString(reply.single().value as String).asJsonObject
+        assertFalse(partial["complete"].asBoolean)
+        assertEquals(1, partial["events"].asJsonArray.size())
+        assertAllWorkOffMainAndClosed()
+    }
     @Test fun attendeeCloseFailureIsOneError() = failure("close:attendees")
     @Test fun reminderCloseFailureIsOneError() = failure("close:reminders")
     private fun failure(at: String) {
@@ -198,6 +206,21 @@ class CalendarRangeReadThreadingTest {
         await(reply)
         assertEquals("500", reply.single().error)
         assertTrue(reply.single().message.orEmpty().contains("serialize-failure"))
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun oneSerializationFailureCannotHideAnotherEvent() {
+        provider.instanceIds = listOf(701L, 702L, 703L)
+        val delegate = CalendarDelegate(null, app)
+        observeSerialization(delegate) { event ->
+            if (event.eventId == "702") throw IllegalStateException("serialize-702")
+        }
+        val reply = read(delegate = delegate); await(reply)
+        assertNull(reply.single().error)
+        val partial = JsonParser.parseString(reply.single().value as String).asJsonObject
+        assertFalse(partial["complete"].asBoolean)
+        assertEquals(listOf(701, 703), partial["events"].asJsonArray.map {
+            it.asJsonObject["eventId"].asInt
+        })
         assertAllWorkOffMainAndClosed()
     }
 
@@ -485,6 +508,79 @@ class CalendarRangeReadThreadingTest {
         assertEquals(2, provider.queries.count { it.path == "reminders" })
         assertAllWorkOffMainAndClosed()
     }
+    @Test fun oneFailedChildRootDoesNotHideIndependentRows() {
+        provider.instanceIds = listOf(701L, 702L, 701L, 703L)
+        provider.failChildId = 702L
+        val reply = read(); await(reply)
+        assertNull(reply.single().error)
+        val partial = JsonParser.parseString(reply.single().value as String).asJsonObject
+        assertFalse(partial["complete"].asBoolean)
+        assertEquals(listOf(701, 701, 703), partial["events"].asJsonArray.map {
+            it.asJsonObject["eventId"].asInt
+        })
+        assertAllWorkOffMainAndClosed()
+        provider.failChildId = null
+        val retry = read(); await(retry)
+        assertNull(retry.single().error)
+        assertEquals(4, JsonParser.parseString(retry.single().value as String).asJsonArray.size())
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun oneMalformedInstanceDoesNotHideLaterIndependentRows() {
+        provider.instanceIds = listOf(701L, 702L, 703L)
+        provider.badInstanceIndex = 1
+        val reply = read(); await(reply)
+        assertNull(reply.single().error)
+        val partial = JsonParser.parseString(reply.single().value as String).asJsonObject
+        assertFalse(partial["complete"].asBoolean)
+        assertEquals(listOf(701, 703), partial["events"].asJsonArray.map {
+            it.asJsonObject["eventId"].asInt
+        })
+        assertAllWorkOffMainAndClosed()
+    }
+    private class UnexpectedRowFailure : RuntimeException("deterministic unknown row failure")
+    @Test fun unknownCalendarParserFailurePreservesIndependentCalendars() {
+        provider.calendarCount = 3
+        provider.badCalendarIndex = 1
+        val reply = Reply().also { replies.add(it) }
+        CalendarDelegate(null, app).retrieveCalendars(reply)
+        await(reply)
+        assertNull(reply.single().error)
+        val partial = JsonParser.parseString(reply.single().value as String).asJsonObject
+        assertFalse(partial["complete"].asBoolean)
+        assertEquals(listOf(7, 9), partial["calendars"].asJsonArray.map {
+            it.asJsonObject["id"].asInt
+        })
+        assertTrue(provider.cursors.all { it.closes == 1 })
+    }
+    @Test fun unknownParserFailureNeverDiscardsIndependentRows() {
+        for (badIndex in 0..2) {
+            provider.instanceIds = listOf(701L, 702L, 703L)
+            provider.badInstanceIndex = badIndex
+            provider.unknownRowFailure = true
+            val reply = read(); await(reply)
+            assertNull(reply.single().error)
+            val partial = JsonParser.parseString(reply.single().value as String).asJsonObject
+            assertFalse(partial["complete"].asBoolean)
+            assertEquals(listOf(701, 702, 703).filterIndexed { index, _ -> index != badIndex },
+                partial["events"].asJsonArray.map { it.asJsonObject["eventId"].asInt })
+            assertAllWorkOffMainAndClosed()
+        }
+        provider.badInstanceIndex = null
+        val recovered = read(); await(recovered)
+        assertEquals(3, JsonParser.parseString(recovered.single().value as String).asJsonArray.size())
+    }
+    @Test fun cursorFailureAfterTwoRowsRetainsThoseRowsWithoutCompleteness() {
+        provider.instanceIds = listOf(701L, 702L, 703L)
+        provider.failInstanceMoveAt = 2
+        val reply = read(); await(reply)
+        assertNull(reply.single().error)
+        val partial = JsonParser.parseString(reply.single().value as String).asJsonObject
+        assertFalse(partial["complete"].asBoolean)
+        assertEquals(listOf(701, 702), partial["events"].asJsonArray.map {
+            it.asJsonObject["eventId"].asInt
+        })
+        assertAllWorkOffMainAndClosed()
+    }
     @Test fun cachedRawAttendeesAreNormalizedForEachOccurrence() {
         provider.instanceIds = List(3) { 701L }; provider.ownerStatuses = listOf(1, 4)
         provider.instanceStatuses = listOf(4, 1, 4)
@@ -533,13 +629,16 @@ class CalendarRangeReadThreadingTest {
         assertTrue(provider.cursors.all { it.closes == 1 && it.isClosed })
         replies.filter { it.results.isNotEmpty() }.forEach { it.single() }
     }
-    private fun observeSerialization(delegate: CalendarDelegate, observe: () -> Unit) {
+    private fun observeSerialization(delegate: CalendarDelegate, observe: (Event) -> Unit) {
         val factory = object : TypeAdapterFactory {
             override fun <T> create(gson: Gson, type: TypeToken<T>): TypeAdapter<T>? {
                 if (type.rawType != Event::class.java) return null
                 val normal = gson.getDelegateAdapter(this, type)
                 return object : TypeAdapter<T>() {
-                    override fun write(writer: JsonWriter, value: T) { observe(); normal.write(writer, value) }
+                    override fun write(writer: JsonWriter, value: T) {
+                        observe(value as Event)
+                        normal.write(writer, value)
+                    }
                     override fun read(reader: JsonReader): T = normal.read(reader)
                 }
             }
@@ -560,6 +659,12 @@ class CalendarRangeReadThreadingTest {
         var reminderMinutes = 10
         var childrenById = false
         var failAt: String? = null
+        var failChildId: Long? = null
+        var badInstanceIndex: Int? = null
+        var badCalendarIndex: Int? = null
+        var calendarCount = 1
+        var unknownRowFailure = false
+        var failInstanceMoveAt: Int? = null
         var nullPath: String? = null
         var emptyPath: String? = null
         var revoke = false
@@ -575,7 +680,7 @@ class CalendarRangeReadThreadingTest {
                            selectionArgs: Array<out String>?, sortOrder: String?): Cursor? {
             val path = uri.pathSegments.first()
             record("query:$path")
-            val calendar = if (path == "calendars") uri.lastPathSegment!!
+            val calendar = if (path == "calendars") uri.lastPathSegment!!.takeIf { it != "calendars" } ?: "7"
                 else if (path == "instances") selectionArgs!!.first() else "7"
             queries.add(Query(path, uri, projection!!.toList(), selection, selectionArgs?.toList(), sortOrder))
             if (path == gatePath && calendar == gateCalendar && gated.compareAndSet(false, true)) {
@@ -585,18 +690,23 @@ class CalendarRangeReadThreadingTest {
                 if (failAfterGate) throw IllegalStateException("held-query-failed")
             }
             if (failAt == "query:$path") throw IllegalStateException(failAt)
+            if (path == "reminders" && failChildId != null &&
+                selection?.contains("= $failChildId") == true) {
+                throw IllegalStateException("reminder query failed for $failChildId")
+            }
             if (revoke && path in setOf("instances", "events")) throw SecurityException("calendar permission revoked")
             if (nullPath == path) return null
             val matrix = MatrixCursor(projection)
             if (emptyPath != path) {
                 val count = when (path) {
+                    "calendars" -> calendarCount
                     "instances" -> instanceIds?.size ?: 1
                     "attendees" -> ownerStatuses.size
                     else -> 1
                 }
                 for (index in 0 until count) {
                 val values: Map<String, Any?> = when (path) {
-                    "calendars" -> mapOf("_id" to calendar.toLong(), "calendar_displayName" to "Work",
+                    "calendars" -> mapOf("_id" to calendar.toLong() + index, "calendar_displayName" to "Work",
                         "account_name" to "me@example.com", "ownerAccount" to "me@example.com",
                         "account_type" to "com.google", "calendar_access_level" to 700, "calendar_color" to 0)
                     "instances" -> mapOf("event_id" to (instanceIds?.get(index) ?: 701L), "title" to "ordinary fixture",
@@ -631,8 +741,22 @@ class CalendarRangeReadThreadingTest {
             if (provider.failAt == "read:$path") throw IllegalStateException(provider.failAt)
         }
         override fun moveToFirst(): Boolean { reading(); return super.moveToFirst() }
-        override fun moveToNext(): Boolean { reading(); return super.moveToNext() }
-        override fun getString(index: Int): String? { reading(); return super.getString(index) }
+        override fun moveToNext(): Boolean {
+            reading()
+            if (path == "instances" && position + 1 == provider.failInstanceMoveAt) {
+                throw IllegalStateException("Instances cursor stopped after $position")
+            }
+            return super.moveToNext()
+        }
+        override fun getString(index: Int): String? {
+            reading()
+            if (path == "calendars" && position == provider.badCalendarIndex) throw UnexpectedRowFailure()
+            if (path == "instances" && position == provider.badInstanceIndex) {
+                if (provider.unknownRowFailure) throw UnexpectedRowFailure()
+                throw IllegalArgumentException("Malformed instance at $position")
+            }
+            return super.getString(index)
+        }
         override fun getInt(index: Int): Int { reading(); return super.getInt(index) }
         override fun getLong(index: Int): Long { reading(); return super.getLong(index) }
         override fun close() {

@@ -17,7 +17,8 @@ import org.dmfs.rfc5545.recur.RecurrenceRule
 
 /** Narrow compare-and-set operation, never a split/reset/save implementation.
  * Full related-row coverage is read by native identity, not by loaded UI dates.
- * Every assertion and the single RRULE update runs in one provider batch.
+ * Every assertion and the recurrence update runs in one provider batch.
+ * An existing prefix repeats its guarded DTSTART to invalidate Instances.
  */
 internal object RecentRecurrenceRepair {
     val columns = arrayOf(Events._ID, Events.CALENDAR_ID, Events.DTSTART,
@@ -63,32 +64,67 @@ internal object RecentRecurrenceRepair {
 
     fun apply(resolver: ContentResolver, calendar: String, roots: List<String>,
               rows: List<Map<String, String?>>, target: String, rule: String,
-              repairId: String = "unavailable", debugLoggingEnabled: Boolean = false): Boolean {
-        require(roots.size >= 2 && target in roots && rows.isNotEmpty() && rows.size <= 256)
+              repairId: String = "unavailable", debugLoggingEnabled: Boolean = false,
+              kind: String = "split-prefix"): Boolean {
+        require(kind == "split-prefix" || kind == "recurrence-creation")
+        require(roots.size >= (if (kind == "split-prefix") 2 else 1) &&
+            target in roots && rows.isNotEmpty() && rows.size <= 256)
         require(rows.all { it.keys == columns.toSet() && it[Events.CALENDAR_ID] == calendar })
         require(rows.map { it[Events._ID] }.distinct().size == rows.size)
         require(roots.all { id -> rows.any { it[Events._ID] == id && it[Events.DELETED] == "0" } })
         val root = rows.single { it[Events._ID] == target }
-        require(root[Events.ORIGINAL_ID] == null && root[Events.RRULE] != null)
+        require(root[Events.ORIGINAL_ID] == null && root[Events.ORIGINAL_SYNC_ID] == null)
         require(rule.isNotBlank() && rule.length <= 8192 && rule != root[Events.RRULE])
-        val oldRule = RecurrenceRule(root[Events.RRULE]!!)
         val newRule = RecurrenceRule(rule)
-        fun pattern(raw: String) = raw.uppercase().split(';').filterNot {
-            it.startsWith("COUNT=") || it.startsWith("UNTIL=") || it == "WKST=MO" || it == "INTERVAL=1"
-        }.sorted()
-        require(pattern(oldRule.toString()) == pattern(newRule.toString())) {
-            "A repair cannot change the recurrence pattern"
-        }
-        val oldCount = oldRule.count ?: 0
-        val newCount = newRule.count ?: 0
-        if (oldCount > 0) {
-            require(newCount in 1 until oldCount) { "Repair must strictly shorten the prefix" }
-        } else {
-            val until = newRule.until
-            require(newCount <= 0 && until != null &&
-                (oldRule.until == null || until.timestamp < oldRule.until.timestamp)) {
-                "Repair must strictly shorten the prefix"
+        val createRange = if (kind == "recurrence-creation") {
+            // A later local split can leave the original created root with a
+            // surviving successor. Guard that whole known structure while
+            // restoring only the original root's recurrence storage.
+            require(rows.size == roots.size && root[Events.RRULE] == null)
+            require(rows.filter { it[Events._ID] != target }.all {
+                it[Events.ORIGINAL_ID] == null &&
+                    it[Events.ORIGINAL_SYNC_ID] == null &&
+                    it[Events.RRULE] != null &&
+                    it[Events.DELETED] == "0" &&
+                    it[Events.STATUS] != "2"
+            })
+            require(root[Events.RDATE] == null && root[Events.EXRULE] == null && root[Events.EXDATE] == null)
+            val start = root[Events.DTSTART]?.toLongOrNull()
+            val storedEnd = root[Events.DTEND]?.toLongOrNull()
+            val storedDuration = parseDurationMillis(root[Events.DURATION])
+            require((storedEnd != null && root[Events.DURATION] == null) ||
+                (storedEnd == null && storedDuration != null &&
+                    root[Events.EVENT_END_TIMEZONE] == null))
+            val end = when {
+                start == null -> null
+                storedEnd != null -> storedEnd
+                storedDuration != null -> Math.addExact(start, storedDuration)
+                else -> null
             }
+            require(start != null && end != null && end > start &&
+                (end - start) % 1000L == 0L)
+            Pair(start, end)
+        } else {
+            require(root[Events.RRULE] != null)
+            val oldRule = RecurrenceRule(root[Events.RRULE]!!)
+            fun pattern(raw: String) = raw.uppercase().split(';').filterNot {
+                it.startsWith("COUNT=") || it.startsWith("UNTIL=") || it == "WKST=MO" || it == "INTERVAL=1"
+            }
+            require(pattern(oldRule.toString()).sorted() == pattern(newRule.toString()).sorted()) {
+                "A repair cannot change the recurrence pattern"
+            }
+            val oldCount = oldRule.count ?: 0
+            val newCount = newRule.count ?: 0
+            if (oldCount > 0) {
+                require(newCount in 1 until oldCount) { "Repair must strictly shorten the prefix" }
+            } else {
+                val until = newRule.until
+                require(newCount <= 0 && until != null &&
+                    (oldRule.until == null || until.timestamp < oldRule.until.timestamp)) {
+                    "Repair must strictly shorten the prefix"
+                }
+            }
+            null
         }
         val syncIds = rows.filter { it[Events._ID] in roots }.mapNotNull { it[Events._SYNC_ID] }.distinct()
         val (where, args) = selection(roots, syncIds)
@@ -106,10 +142,26 @@ internal object RecentRecurrenceRepair {
                     arrayOf(row[Events._ID]!!, calendar))
                 .withValues(values).withExpectedCount(1).build())
         }
+        val values = if (createRange != null) ContentValues().apply {
+            val (start, end) = createRange
+            // These are the minimal CalendarProvider fields for recurrence
+            // creation. DTSTART is repeated to invalidate generated Instances.
+            recurrenceStorageChanges(rule, start, root[Events.EVENT_TIMEZONE], end,
+                root[Events.EVENT_END_TIMEZONE], root[Events.ALL_DAY] == "1",
+                "P${(end - start) / 1000L}S").forEach { (column, value) ->
+                when (value) {
+                    null -> putNull(column)
+                    is String -> put(column, value)
+                    is Long -> put(column, value)
+                    is Int -> put(column, value)
+                    else -> error("Unsupported recurrence value for $column")
+                }
+            }
+        } else recurrencePrefixStorageChanges(rule, requireNotNull(root[Events.DTSTART]?.toLongOrNull()))
         operations.add(ContentProviderOperation.newUpdate(Events.CONTENT_URI)
             .withSelection("${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND ${Events.DELETED} = 0",
                 arrayOf(target, calendar))
-            .withValue(Events.RRULE, rule).withExpectedCount(1).build())
+            .withValues(values).withExpectedCount(1).build())
         return try {
             resolver.applyBatch(CalendarContract.AUTHORITY, operations)
             // Intentionally NOT gated by debugLoggingEnabled/BuildConfig:
@@ -121,7 +173,8 @@ internal object RecentRecurrenceRepair {
                 Log.i("KeepCalSyncRepair", "applied " + JSONObject(mapOf(
                     "repairId" to token(repairId), "calendar" to token(calendar),
                     "root" to token(target), "field" to "rrule",
-                    "operation" to "restore-split-prefix"
+                    "operation" to if (kind == "recurrence-creation")
+                        "restore-recurrence-creation" else "restore-split-prefix"
                 )).toString())
             }
             true
@@ -180,7 +233,8 @@ internal object RecentRecurrenceRepair {
                         reply.success(if (apply(context.contentResolver, calendar, roots, rows,
                             input["target"] as String, input["rule"] as String,
                             input["repairId"] as? String ?: "unavailable",
-                            debugLoggingEnabled || input["debugLoggingEnabled"] == true)) "updated" else "conflict")
+                            debugLoggingEnabled || input["debugLoggingEnabled"] == true,
+                            input["kind"] as? String ?: "split-prefix")) "updated" else "conflict")
                     }
                 }
             }

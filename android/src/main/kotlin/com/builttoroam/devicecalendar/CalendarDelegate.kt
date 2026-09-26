@@ -201,23 +201,42 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (arePermissionsGranted()) {
             val contentResolver: ContentResolver? = _context?.contentResolver
             val uri: Uri = CalendarContract.Calendars.CONTENT_URI
-            val cursor: Cursor? = if (atLeastAPI(17)) {
-                contentResolver?.query(uri, Cst.CALENDAR_PROJECTION, null, null, null)
-            } else {
-                contentResolver?.query(uri, Cst.CALENDAR_PROJECTION_OLDER_API, null, null, null)
-            }
             val calendars: MutableList<Calendar> = mutableListOf()
+            var complete = true
             try {
-                while (cursor?.moveToNext() == true) {
-                    val calendar = parseCalendarRow(cursor) ?: continue
-                    calendars.add(calendar)
+                val projection = if (atLeastAPI(17)) Cst.CALENDAR_PROJECTION
+                    else Cst.CALENDAR_PROJECTION_OLDER_API
+                val cursor = contentResolver?.query(uri, projection, null, null, null)
+                    ?: throw IllegalStateException("Calendar query returned no cursor")
+                try {
+                    cursor.use {
+                        while (it.moveToNext()) {
+                            try {
+                                val calendar = parseCalendarRow(it)
+                                    ?: throw IllegalStateException("Missing calendar metadata")
+                                calendars.add(calendar)
+                            } catch (e: Exception) {
+                                if (e is SecurityException) throw e
+                                complete = false
+                                Log.w("KeepCalRead", "Calendar metadata row quarantined", e)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (e is SecurityException || calendars.isEmpty()) throw e
+                    // A broken cursor cannot be continued, but positive rows
+                    // already read are still useful, never absence evidence.
+                    complete = false
+                    Log.w("KeepCalRead", "Calendar metadata query incomplete", e)
                 }
-
-                finishWithSuccess(_gson?.toJson(calendars), pendingChannelResult)
+                if (!complete && calendars.isEmpty()) {
+                    throw IllegalStateException("No usable calendar metadata")
+                }
+                val payload: Any = if (complete) calendars else
+                    mapOf("complete" to false, "calendars" to calendars)
+                finishWithSuccess(_gson?.toJson(payload), pendingChannelResult)
             } catch (e: Exception) {
                 finishWithError(EC.GENERIC_ERROR, e.message, pendingChannelResult)
-            } finally {
-                cursor?.close()
             }
         } else {
             val parameters = CalendarMethodsParametersCacheModel(
@@ -456,41 +475,79 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     calendarId, startDate ?: 0L, endDate ?: Long.MAX_VALUE, requestedEventIds
                 )
                 val events = mutableListOf<Event>()
-                contentResolver?.query(
-                    eventsUriBuilder.build(),
-                    Cst.EVENT_PROJECTION,
-                    instanceQuery.selection,
-                    instanceQuery.selectionArgs,
-                    Events.DTSTART + " DESC"
-                ).use { cursor ->
-                    checkNotNull(cursor) { "CalendarProvider returned no Instances cursor" }
-                    while (cursor.moveToNext()) {
-                        val event = parseEvent(calendarId, cursor) ?: continue
-                        events.add(event)
+                var incomplete = false
+                var firstRowFailure: Exception? = null
+                try {
+                    contentResolver?.query(
+                        eventsUriBuilder.build(),
+                        Cst.EVENT_PROJECTION,
+                        instanceQuery.selection,
+                        instanceQuery.selectionArgs,
+                        Events.DTSTART + " DESC"
+                    ).use { cursor ->
+                        checkNotNull(cursor) { "CalendarProvider returned no Instances cursor" }
+                        while (cursor.moveToNext()) {
+                            try {
+                                val event = parseEvent(calendarId, cursor)
+                                if (event == null) incomplete = true else events.add(event)
+                            } catch (error: Exception) {
+                                if (error is SecurityException) throw error
+                                // Bad row content must not discard independent rows
+                                // returned by the same physical Instances query.
+                                // Do not whitelist parser exception classes: an
+                                // unexpected row failure has the same locality.
+                                incomplete = true
+                                if (firstRowFailure == null) firstRowFailure = error
+                            }
+                        }
                     }
+                } catch (error: Exception) {
+                    // A cursor can fail *after* yielding useful rows. Those
+                    // rows remain positive evidence, but its missing tail is
+                    // never absence evidence. Query/permission failure before
+                    // the first row remains a failed acquisition.
+                    if (error is SecurityException || events.isEmpty()) throw error
+                    incomplete = true
+                    if (firstRowFailure == null) firstRowFailure = error
                 }
                 // Attendees/Reminders are keyed by physical Events ID, not
                 // occurrence time. Reuse only within this read; no evidence
                 // cache across requests, edits or CalendarProvider signals.
                 val attendeesById = mutableMapOf<String, List<Attendee>>()
                 val remindersById = mutableMapOf<String, List<Reminder>>()
+                val unreadableIds = mutableSetOf<String>()
                 for (event in events) {
                     val id = event.eventId!!
-                    val rawAttendees = attendeesById.getOrPut(id) {
-                        retrieveAttendees(calendar, id, contentResolver,
-                            requireCompleteRead = true)
+                    if (id in unreadableIds) continue
+                    try {
+                        val rawAttendees = attendeesById.getOrPut(id) {
+                            retrieveAttendees(calendar, id, contentResolver,
+                                requireCompleteRead = true)
+                        }
+                        val attendees = attendeesWithAuthoritativeSelfStatus(
+                            rawAttendees,
+                            calendar.ownerAccount,
+                            event.selfAttendeeStatus
+                        )
+                        event.organizer =
+                            attendees.firstOrNull { it.isOrganizer != null && it.isOrganizer }
+                        event.attendees = attendees
+                        event.reminders = remindersById.getOrPut(id) {
+                            retrieveReminders(id, contentResolver, requireCompleteRead = true)
+                        }.toMutableList()
+                    } catch (error: Exception) {
+                        if (error is SecurityException) throw error
+                        incomplete = true
+                        unreadableIds.add(id)
+                        if (firstRowFailure == null) firstRowFailure = error
                     }
-                    val attendees = attendeesWithAuthoritativeSelfStatus(
-                        rawAttendees,
-                        calendar.ownerAccount,
-                        event.selfAttendeeStatus
-                    )
-                    event.organizer =
-                        attendees.firstOrNull { it.isOrganizer != null && it.isOrganizer }
-                    event.attendees = attendees
-                    event.reminders = remindersById.getOrPut(id) {
-                        retrieveReminders(id, contentResolver, requireCompleteRead = true)
-                    }.toMutableList()
+                }
+                events.removeAll { it.eventId in unreadableIds }
+                // A reply with no usable rows cannot distinguish an empty
+                // calendar from a completely unreadable one. Keep the old
+                // error contract rather than claiming successful absence.
+                if (incomplete && events.isEmpty()) {
+                    throw firstRowFailure ?: IllegalStateException("All provider rows were unreadable")
                 }
                 if (debugLoggingEnabled) {
                     events.asSequence()
@@ -507,7 +564,29 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             )
                         }
                 }
-                val json = gson?.toJson(events)
+                val json = try {
+                    gson?.toJson(
+                        if (incomplete) mapOf("complete" to false, "events" to events)
+                        else events
+                    )
+                } catch (error: Exception) {
+                    // A serializer failure may belong to one provider event.
+                    // Retry independently and never emit a successful empty
+                    // result when all rows prove unreadable.
+                    val survivors = com.google.gson.JsonArray()
+                    for (event in events) {
+                        try {
+                            survivors.add(gson!!.toJsonTree(event))
+                        } catch (_: Exception) {
+                            incomplete = true
+                        }
+                    }
+                    if (survivors.size() == 0) throw error
+                    com.google.gson.JsonObject().apply {
+                        addProperty("complete", false)
+                        add("events", survivors)
+                    }.toString()
+                }
                 // Post only the prepared result. All cursor cleanup has completed,
                 // including on error, before main-thread reply/cache bookkeeping.
                 uiThreadHandler.post {
@@ -2623,17 +2702,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 expectedAttendees!!
             )
         }
-        val recurrenceGuard = RecurrenceRuleStorageGuard.selection(rawRule)
         operations.add(
-            ContentProviderOperation.newUpdate(Events.CONTENT_URI)
-                .withSelection(
-                    "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
-                        "${recurrenceGuard.sql} AND ${Events.DELETED} != 1",
-                    (listOf(masterEventId, calendarId) + recurrenceGuard.args).toTypedArray()
-                )
-                .withValue(Events.RRULE, oldRule.toString())
-                .withExpectedCount(1)
-                .build()
+            guardedRecurrencePrefixUpdate(calendarId, masterEventId, currentMaster, oldRule.toString(),
+                omitDtstartForTesting = CalendarSplitDebugOptions.omitDtstart(_context))
         )
         val futureEventInsertIndex = operations.size
         val futureEventValues = buildEventContentValues(futureEvent, calendarId).apply {
@@ -4334,6 +4405,39 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
     }
 
+    private fun guardedRecurrencePrefixUpdate(
+        calendarId: String,
+        eventId: String,
+        current: StoredEventChangeValues,
+        rule: String,
+        omitDtstartForTesting: Boolean = false
+    ): ContentProviderOperation {
+        val parts = mutableListOf("${Events._ID} = ?", "${Events.CALENDAR_ID} = ?", "${Events.DELETED} != 1")
+        val args = mutableListOf(eventId, calendarId)
+        RecurrenceRuleStorageGuard.append(parts, args, current.recurrenceRule)
+        // The split ordinal and successor timing were calculated from these
+        // values. In particular, repeating DTSTART must not undo an external
+        // move that arrived after the read but before applyBatch.
+        mapOf(
+            Events.DTSTART to current.rawStartDate,
+            Events.DTEND to current.rawEndDate,
+            Events.DURATION to current.duration,
+            Events.EVENT_TIMEZONE to current.rawStartTimeZone,
+            Events.EVENT_END_TIMEZONE to current.rawEndTimeZone,
+            Events.ALL_DAY to if (current.allDay) 1 else 0
+        ).forEach { (column, value) -> addNullableSelection(parts, args, column, value) }
+        val values = recurrencePrefixStorageChanges(rule, requireNotNull(current.rawStartDate))
+        if (omitDtstartForTesting) {
+            values.remove(Events.DTSTART)
+            Log.w("KeepCalFaultInjection", "split-dtstart-omission attempt calendar=$calendarId root=$eventId")
+        }
+        return ContentProviderOperation.newUpdate(Events.CONTENT_URI)
+            .withSelection(parts.joinToString(" AND "), args.toTypedArray())
+            .withValues(values)
+            .withExpectedCount(1)
+            .build()
+    }
+
     private fun eventChangeResultForCurrent(
         rejectionStage: String,
         current: StoredEventChangeValues,
@@ -5114,9 +5218,11 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     instanceCursor.close()
                     finishWithSuccess(deleteSucceeded != null, pendingChannelResult)
                 } else { // This and following instances
-                    val eventsUriWithId =
-                        ContentUris.withAppendedId(Events.CONTENT_URI, eventIdNumber)
-                    val values = ContentValues()
+                    val current = queryStoredEventChangeValues(contentResolver, calendarId, eventId)
+                    if (current == null || current.deleted || current.rawStartDate == null || current.recurrenceRule == null) {
+                        finishWithError(EC.NOT_FOUND, "The recurring master event could not be found", pendingChannelResult)
+                        return
+                    }
                     val instanceCursor = CalendarContract.Instances.query(
                         contentResolver,
                         Cst.EVENT_INSTANCE_DELETION,
@@ -5129,8 +5235,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             instanceCursor.getLong(Cst.EVENT_INSTANCE_DELETION_ID_INDEX)
 
                         if (eventIdNumber == foundEventID) {
-                            val newRule =
-                                Rrule(instanceCursor.getString(Cst.EVENT_INSTANCE_DELETION_RRULE_INDEX))
+                            val newRule = Rrule(current.recurrenceRule)
                             val lastDate =
                                 instanceCursor.getLong(Cst.EVENT_INSTANCE_DELETION_LAST_DATE_INDEX)
 
@@ -5171,9 +5276,15 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                                 cursor.close()
                             }
 
-                            values.put(Events.RRULE, newRule.toString())
-                            contentResolver?.update(eventsUriWithId, values, null, null)
-                            finishWithSuccess(true, pendingChannelResult)
+                            val updated = try {
+                                contentResolver?.applyBatch(CalendarContract.AUTHORITY, arrayListOf(
+                                    guardedRecurrencePrefixUpdate(calendarId, eventId, current, newRule.toString())
+                                )) != null
+                            } catch (_: android.content.OperationApplicationException) {
+                                false
+                            }
+                            finishWithSuccess(updated, pendingChannelResult)
+                            break
                         }
                     }
                     instanceCursor.close()

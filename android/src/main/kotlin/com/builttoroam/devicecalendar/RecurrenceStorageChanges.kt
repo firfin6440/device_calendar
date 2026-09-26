@@ -1,5 +1,6 @@
 package com.builttoroam.devicecalendar
 
+import android.content.ContentValues
 import android.provider.CalendarContract.Attendees
 import android.provider.CalendarContract.Events
 import com.builttoroam.devicecalendar.models.Attendee
@@ -9,6 +10,20 @@ internal fun shouldReplaceRecurringSeries(
     currentRawRule: String?,
     requestedRawRule: String?
 ): Boolean = recurrenceWasChanged && currentRawRule != null && requestedRawRule == null
+
+/** Narrow update of an existing recurring root, not a whole-event rewrite.
+ * CalendarProvider passes only modified columns to its Instances updater:
+ * without DTSTART an RRULE update succeeds but leaves cached occurrences stale.
+ * With RRULE + DTSTART it re-reads the stored recurrence for expansion, so do
+ * not rewrite duration/timezone/other fields just to trigger invalidation.
+ * The caller must guard this authoritative start and the recurrence basis in
+ * the SAME provider transaction; never use a selected occurrence's start. */
+internal fun recurrencePrefixStorageChanges(rawRule: String, masterStart: Long): ContentValues =
+    ContentValues().apply {
+        require(rawRule.isNotBlank())
+        put(Events.RRULE, rawRule)
+        put(Events.DTSTART, masterStart)
+    }
 
 /**
  * Complete provider fields for changing an event's recurrence definition.
