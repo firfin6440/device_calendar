@@ -66,7 +66,7 @@ internal object RecentRecurrenceRepair {
               rows: List<Map<String, String?>>, target: String, rule: String,
               repairId: String = "unavailable", debugLoggingEnabled: Boolean = false,
               kind: String = "split-prefix"): Boolean {
-        require(kind == "split-prefix" || kind == "recurrence-creation")
+        require(kind in setOf("split-prefix", "recurrence-creation", "recurrence-limit"))
         require(roots.size >= (if (kind == "split-prefix") 2 else 1) &&
             target in roots && rows.isNotEmpty() && rows.size <= 256)
         require(rows.all { it.keys == columns.toSet() && it[Events.CALENDAR_ID] == calendar })
@@ -74,6 +74,7 @@ internal object RecentRecurrenceRepair {
         require(roots.all { id -> rows.any { it[Events._ID] == id && it[Events.DELETED] == "0" } })
         val root = rows.single { it[Events._ID] == target }
         require(root[Events.ORIGINAL_ID] == null && root[Events.ORIGINAL_SYNC_ID] == null)
+        require(root[Events.STATUS] != "2")
         require(rule.isNotBlank() && rule.length <= 8192 && rule != root[Events.RRULE])
         val newRule = RecurrenceRule(rule)
         val createRange = if (kind == "recurrence-creation") {
@@ -115,7 +116,15 @@ internal object RecentRecurrenceRepair {
             }
             val oldCount = oldRule.count ?: 0
             val newCount = newRule.count ?: 0
-            if (oldCount > 0) {
+            if (kind == "recurrence-limit") {
+                // Temporal/history authorization is owned by the durable Dart
+                // ledger. This native effect may restore a proven limit in
+                // either direction, but NEVER change recurrence pattern or
+                // replay a whole-event save. The exact rows are CAS-guarded below.
+                require(oldCount != newCount || oldRule.until != newRule.until) {
+                    "Recurrence limit must change"
+                }
+            } else if (oldCount > 0) {
                 require(newCount in 1 until oldCount) { "Repair must strictly shorten the prefix" }
             } else {
                 val until = newRule.until
@@ -173,8 +182,11 @@ internal object RecentRecurrenceRepair {
                 Log.i("KeepCalSyncRepair", "applied " + JSONObject(mapOf(
                     "repairId" to token(repairId), "calendar" to token(calendar),
                     "root" to token(target), "field" to "rrule",
-                    "operation" to if (kind == "recurrence-creation")
-                        "restore-recurrence-creation" else "restore-split-prefix"
+                    "operation" to when (kind) {
+                        "recurrence-creation" -> "restore-recurrence-creation"
+                        "recurrence-limit" -> "restore-recurrence-limit"
+                        else -> "restore-split-prefix"
+                    }
                 )).toString())
             }
             true

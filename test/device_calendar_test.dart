@@ -412,8 +412,8 @@ void main() {
 
     const EventChangeSet changes = EventChangeSet(
       color: EventFieldChange<EventColorValue>(
-        expected: EventColorValue(color: 0xff112233, colorKey: 3),
-        requested: EventColorValue(color: 0xff445566, colorKey: 7),
+        expected: EventColorValue(color: 0xff112233, colorKey: '3'),
+        requested: EventColorValue(color: 0xff445566, colorKey: '7'),
       ),
     );
     final result = await deviceCalendarPlugin.applyEventChanges(
@@ -426,7 +426,7 @@ void main() {
     expect(result.data?.outcome, EventChangeOutcome.updated);
     expect(result.data?.conflictingFields, isEmpty);
     expect(result.data?.currentColor?.color, 0xff445566);
-    expect(result.data?.currentColor?.colorKey, 7);
+    expect(result.data?.currentColor?.colorKey, '7');
     expect(result.data?.resultingEventId, 'new-series-id');
     expect(log, <Matcher>[
       isMethodCall(
@@ -438,11 +438,11 @@ void main() {
             'color': <String, Object?>{
               'expected': <String, Object?>{
                 'color': 0xff112233,
-                'colorKey': 3,
+                'colorKey': '3',
               },
               'requested': <String, Object?>{
                 'color': 0xff445566,
-                'colorKey': 7,
+                'colorKey': '7',
               },
             },
           },
@@ -883,8 +883,8 @@ void main() {
       eventId: 'eventId',
       changes: const EventChangeSet(
         color: EventFieldChange<EventColorValue>(
-          expected: EventColorValue(color: 0xff112233, colorKey: 3),
-          requested: EventColorValue(color: 0xff445566, colorKey: 7),
+          expected: EventColorValue(color: 0xff112233, colorKey: '3'),
+          requested: EventColorValue(color: 0xff445566, colorKey: '7'),
         ),
       ),
     );
@@ -895,7 +895,7 @@ void main() {
       <EventChangeField>{EventChangeField.color},
     );
     expect(result.data?.currentColor?.color, 0xff778899);
-    expect(result.data?.currentColor?.colorKey, 9);
+    expect(result.data?.currentColor?.colorKey, '9');
   });
 
   test('ApplyEventChanges_RequiresAChange', () async {
@@ -1305,7 +1305,7 @@ void main() {
       originalStart: startTime.subtract(const Duration(days: 1)),
       originalEventId: 'originalEventId',
     );
-    event.updateEventColor(EventColor(0xffff00ff, 1));
+    event.updateEventColor(EventColor(0xffff00ff, 'brand-blue'));
 
     final stringEvent = event.toJson();
     expect(stringEvent, isNotNull);

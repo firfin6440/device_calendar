@@ -735,45 +735,47 @@ class DeviceCalendarPlugin {
       return null;
     }
     final accountName = calendar.accountName;
-    if (accountName == null) {
+    final accountType = calendar.accountType;
+    if (accountName == null || accountType == null) {
       return [];
     }
     final dynamic colors = await _invokeChannelMethod(
       ChannelConstants.methodNameRetrieveEventColors,
       arguments: () => <String, String>{
         ChannelConstants.parameterAccountName: accountName,
+        ChannelConstants.parameterAccountType: accountType,
       },
     );
     return (colors.data as List)
         .cast<List>()
-        .map((color) => EventColor(color[0], color[1]))
+        .map((color) => EventColor(color[0] as int, color[1].toString()))
         .toList();
   }
 
-  /// Retrieves available colors for Google Calendars.
-  ///
-  /// For non-Google calendars, an empty list is returned. Use the `color` parameter in [updateCalendarColor] for these.
+  /// Retrieves the colors published for this calendar's account and type.
   ///
   /// [calendar] The calendar to retrieve colors for.
   ///
-  /// Returns a List with available colors for Google Calendars or an empty list for others.
+  /// Returns an empty list when the account publishes no calendar colors.
   Future<List<CalendarColor>> retrieveCalendarColors(Calendar calendar) async {
     if (!Platform.isAndroid) {
       return [];
     }
     final accountName = calendar.accountName;
-    if (accountName == null) {
+    final accountType = calendar.accountType;
+    if (accountName == null || accountType == null) {
       return [];
     }
     final dynamic colors = await _invokeChannelMethod(
       ChannelConstants.methodNameRetrieveCalendarColors,
       arguments: () => <String, String>{
         ChannelConstants.parameterAccountName: accountName,
+        ChannelConstants.parameterAccountType: accountType,
       },
     );
     return (colors.data as List)
         .cast<List>()
-        .map((color) => CalendarColor(color[0], color[1]))
+        .map((color) => CalendarColor(color[0] as int, color[1].toString()))
         .toList();
   }
 

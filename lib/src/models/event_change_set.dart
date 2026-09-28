@@ -14,7 +14,7 @@ class EventFieldChange<T> {
 
 class EventColorValue {
   final int? color;
-  final int? colorKey;
+  final String? colorKey;
 
   const EventColorValue({
     required this.color,
@@ -29,7 +29,7 @@ class EventColorValue {
   factory EventColorValue.fromJson(Map<Object?, Object?> json) {
     return EventColorValue(
       color: json['color'] as int?,
-      colorKey: json['colorKey'] as int?,
+      colorKey: json['colorKey']?.toString(),
     );
   }
 }

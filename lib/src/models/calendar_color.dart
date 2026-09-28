@@ -1,6 +1,6 @@
 class CalendarColor {
   final int color;
-  final int colorKey;
+  final String colorKey;
 
   CalendarColor(this.color, this.colorKey);
 

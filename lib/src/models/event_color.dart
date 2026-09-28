@@ -1,6 +1,6 @@
 class EventColor {
   final int color;
-  final int colorKey;
+  final String colorKey;
 
   EventColor(this.color, this.colorKey);
 

@@ -43,7 +43,6 @@ import org.dmfs.rfc5545.recur.Freq as RruleFreq
 import org.dmfs.rfc5545.recur.InvalidRecurrenceRuleException
 import org.dmfs.rfc5545.recur.RecurrenceRule as Rrule
 import android.provider.CalendarContract.Colors
-import androidx.collection.SparseArrayCompat
 
 private const val RETRIEVE_CALENDARS_REQUEST_CODE = 0
 private const val RETRIEVE_EVENTS_REQUEST_CODE = RETRIEVE_CALENDARS_REQUEST_CODE + 1
@@ -1783,7 +1782,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val endTimeZone: String?,
         val recurrenceRule: String?,
         val color: Int?,
-        val colorKey: Int?,
+        val colorKey: String?,
         val status: Int?,
         val dirty: Boolean,
         val deleted: Boolean
@@ -1934,7 +1933,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             endTimeZone = if (cursor.isNull(9)) null else cursor.getString(9),
                             recurrenceRule = if (cursor.isNull(10)) null else cursor.getString(10),
                             color = if (cursor.isNull(11)) null else cursor.getInt(11),
-                            colorKey = if (cursor.isNull(12)) null else cursor.getInt(12),
+                            colorKey = if (cursor.isNull(12)) null else cursor.getString(12)?.takeIf { it.isNotEmpty() },
                             status = if (cursor.isNull(13)) null else cursor.getInt(13),
                             dirty = !cursor.isNull(14) && cursor.getInt(14) == 1,
                             deleted = !cursor.isNull(15) && cursor.getInt(15) == 1
@@ -1972,9 +1971,11 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
     }
 
-    private fun requestedColorKey(eventChanges: Map<String, Any?>): Int? =
-        (((eventChanges["color"] as? Map<*, *>)?.get("requested") as? Map<*, *>)
-            ?.get("colorKey") as? Number)?.toInt()
+    private fun colorKey(value: Any?): String? = value?.toString()?.takeIf { it.isNotEmpty() }
+
+    private fun requestedColorKey(eventChanges: Map<String, Any?>): String? =
+        colorKey(((eventChanges["color"] as? Map<*, *>)?.get("requested") as? Map<*, *>)
+            ?.get("colorKey"))
 
     private fun requestedTitle(eventChanges: Map<String, Any?>): String? =
         ((eventChanges["title"] as? Map<*, *>)?.get("requested") as? String)
@@ -2019,7 +2020,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val recurrenceChange = eventChanges["recurrence"] as? Map<*, *>
         val expectedColor = colorChange?.get("expected") as? Map<*, *>
         val expectedColorValue = (expectedColor?.get("color") as? Number)?.toInt()
-        val expectedColorKey = (expectedColor?.get("colorKey") as? Number)?.toInt()
+        val expectedColorKey = colorKey(expectedColor?.get("colorKey"))
         val expectedTitle = titleChange?.get("expected") as? String
         val expectedLocation = locationChange?.get("expected") as? String
         val expectedDateRange =
@@ -2384,7 +2385,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val recurrenceChange = eventChanges["recurrence"] as? Map<*, *>
         val expectedColor = colorChange?.get("expected") as? Map<*, *>
         val expectedColorValue = (expectedColor?.get("color") as? Number)?.toInt()
-        val expectedColorKey = (expectedColor?.get("colorKey") as? Number)?.toInt()
+        val expectedColorKey = colorKey(expectedColor?.get("colorKey"))
         val expectedTitle = titleChange?.get("expected") as? String
         val expectedLocation = locationChange?.get("expected") as? String
         val requestedLocation = requestedLocation(eventChanges)
@@ -3036,9 +3037,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
 
         val expectedColorValue = (expectedColor?.get("color") as? Number)?.toInt()
-        val expectedColorKey = (expectedColor?.get("colorKey") as? Number)?.toInt()
+        val expectedColorKey = colorKey(expectedColor?.get("colorKey"))
         val requestedColorValue = (requestedColor?.get("color") as? Number)?.toInt()
-        val requestedColorKey = (requestedColor?.get("colorKey") as? Number)?.toInt()
+        val requestedColorKey = colorKey(requestedColor?.get("colorKey"))
         val expectedTitle = titleChange?.get("expected") as? String
         val requestedTitle = titleChange?.get("requested") as? String
         val expectedLocation = locationChange?.get("expected") as? String
@@ -3139,7 +3140,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 selectionArgs.add(expectedColorValue.toString())
             }
             if (expectedColorKey == null) {
-                selectionParts.add("(${Events.EVENT_COLOR_KEY} IS NULL OR ${Events.EVENT_COLOR_KEY} = 0)")
+                selectionParts.add("(${Events.EVENT_COLOR_KEY} IS NULL OR ${Events.EVENT_COLOR_KEY} = '')")
             } else {
                 selectionParts.add("${Events.EVENT_COLOR_KEY} = ?")
                 selectionArgs.add(expectedColorKey.toString())
@@ -3648,9 +3649,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val expectedLocation = locationChange?.get("expected") as? String
         val requestedLocation = locationChange?.get("requested") as? String
         val expectedColorValue = (expectedColor?.get("color") as? Number)?.toInt()
-        val expectedColorKey = (expectedColor?.get("colorKey") as? Number)?.toInt()
+        val expectedColorKey = colorKey(expectedColor?.get("colorKey"))
         val requestedColorValue = (requestedColor?.get("color") as? Number)?.toInt()
-        val requestedColorKey = (requestedColor?.get("colorKey") as? Number)?.toInt()
+        val requestedColorKey = colorKey(requestedColor?.get("colorKey"))
         val exceptionColorWritePlan = recurrenceExceptionColorWritePlan(
             colorChange != null,
             requestedColorKey
@@ -3844,7 +3845,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             }
             if (expectedColorKey == null) {
                 masterSelectionParts.add(
-                    "(${Events.EVENT_COLOR_KEY} IS NULL OR ${Events.EVENT_COLOR_KEY} = 0)"
+                    "(${Events.EVENT_COLOR_KEY} IS NULL OR ${Events.EVENT_COLOR_KEY} = '')"
                 )
             } else {
                 masterSelectionParts.add("${Events.EVENT_COLOR_KEY} = ?")
@@ -4274,7 +4275,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         outcome: String,
         conflictingFields: List<String>,
         color: Int?,
-        colorKey: Int?,
+        colorKey: String?,
         title: String?,
         dateRange: EventDateRangeValue?,
         reminders: List<EventReminderValue>? = null,
@@ -4304,7 +4305,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     private data class StoredEventChangeValues(
         val deleted: Boolean,
         val color: Int?,
-        val colorKey: Int?,
+        val colorKey: String?,
         val title: String?,
         val location: String?,
         val rawStartDate: Long?,
@@ -4364,7 +4365,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             StoredEventChangeValues(
                 deleted = it.getInt(0) == 1,
                 color = if (it.isNull(1) || it.getInt(1) == 0) null else it.getInt(1),
-                colorKey = if (it.isNull(2) || it.getInt(2) == 0) null else it.getInt(2),
+                colorKey = if (it.isNull(2)) null else it.getString(2)?.takeIf { key -> key.isNotEmpty() },
                 title = if (it.isNull(3)) null else it.getString(3),
                 location = if (it.isNull(4)) null else it.getString(4),
                 rawStartDate = if (it.isNull(5)) null else it.getLong(5),
@@ -4443,7 +4444,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         current: StoredEventChangeValues,
         colorChange: Map<*, *>?,
         requestedColor: Int?,
-        requestedColorKey: Int?,
+        requestedColorKey: String?,
         titleChange: Map<*, *>?,
         requestedTitle: String?,
         dateRangeChange: Map<*, *>?,
@@ -4523,7 +4524,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             // the values at the instant Android rejected an assertion.
             val matches = mapOf(
                 "color" to (current.color == (expectedColor?.get("color") as? Number)?.toInt() &&
-                    current.colorKey == (expectedColor?.get("colorKey") as? Number)?.toInt()),
+                    current.colorKey == colorKey(expectedColor?.get("colorKey"))),
                 "title" to (current.title == titleChange?.get("expected")),
                 "location" to (current.location == locationChange?.get("expected")),
                 "dateRange" to (current.dateRange == parseEventDateRangeValue(dateRangeChange?.get("expected"))),
@@ -5413,7 +5414,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val availability = parseAvailability(cursor.getInt(Cst.EVENT_PROJECTION_AVAILABILITY_INDEX))
         val eventStatus = parseEventStatus(cursor.getInt(Cst.EVENT_PROJECTION_STATUS_INDEX))
         val eventColor = cursor.getInt(Cst.EVENT_PROJECTION_EVENT_COLOR_INDEX)
-        val eventColorKey = cursor.getInt(Cst.EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX)
+        val eventColorKey = cursor.nullableString(Cst.EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX)
         val originalEventId = if (cursor.isNull(Cst.EVENT_PROJECTION_ORIGINAL_ID_INDEX)) {
             null
         } else {
@@ -5457,7 +5458,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         event.availability = availability
         event.eventStatus = eventStatus
         event.eventColor = if (eventColor == 0) null else eventColor
-        event.eventColorKey = if (eventColorKey == 0) null else eventColorKey
+        event.eventColorKey = eventColorKey?.takeIf { it.isNotEmpty() }
 
         return event
     }
@@ -5506,7 +5507,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             cursor.getInt(Cst.MASTER_EVENT_PROJECTION_STATUS_INDEX)
         )
         val eventColor = cursor.getInt(Cst.MASTER_EVENT_PROJECTION_EVENT_COLOR_INDEX)
-        val eventColorKey = cursor.getInt(Cst.MASTER_EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX)
+        val eventColorKey = cursor.nullableString(Cst.MASTER_EVENT_PROJECTION_EVENT_COLOR_KEY_INDEX)
         val syncId = if (cursor.isNull(Cst.MASTER_EVENT_PROJECTION_SYNC_ID_INDEX)) {
             null
         } else {
@@ -5519,7 +5520,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             cursor.isNull(Cst.MASTER_EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX)
         ) null else cursor.getLong(Cst.MASTER_EVENT_PROJECTION_ORIGINAL_INSTANCE_TIME_INDEX)
         event.eventColor = if (eventColor == 0) null else eventColor
-        event.eventColorKey = if (eventColorKey == 0) null else eventColorKey
+        event.eventColorKey = eventColorKey?.takeIf { it.isNotEmpty() }
         event.syncId = syncId
         event.eventIsDirty =
             cursor.getInt(Cst.MASTER_EVENT_PROJECTION_DIRTY_INDEX) != 0
@@ -5836,49 +5837,43 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         return reminders
     }
 
-    /**
-     * load available event colors for the given account name
-     * unable to find official documentation, so logic is based on https://android.googlesource.com/platform/packages/apps/Calendar.git/+/refs/heads/pie-release/src/com/android/calendar/EventInfoFragment.java
-     **/
-    private fun retrieveColors(accountName: String, colorType: Int): List<Pair<Int, Int>> {
+    /** Colors.COLOR_KEY is TEXT and is unique only within an account name/type pair. */
+    private fun retrieveColors(accountName: String, accountType: String, colorType: Int): List<Pair<Int, String>> {
         val contentResolver: ContentResolver? = _context?.contentResolver
         val uri: Uri = Colors.CONTENT_URI
-        val colors = mutableListOf<Int>()
-        val displayColorKeyMap = SparseArrayCompat<Int>()
+        val colors = mutableListOf<Pair<Int, String>>()
 
         val projection = arrayOf(
             Colors.COLOR,
             Colors.COLOR_KEY,
         )
 
-        // load only event colors for the given account name
-        val selection = "${Colors.COLOR_TYPE} = ? AND ${Colors.ACCOUNT_NAME} = ?"
-        val selectionArgs = arrayOf(colorType.toString(), accountName)
+        val selection = "${Colors.COLOR_TYPE} = ? AND ${Colors.ACCOUNT_NAME} = ? AND ${Colors.ACCOUNT_TYPE} = ?"
+        val selectionArgs = arrayOf(colorType.toString(), accountName, accountType)
 
 
         val cursor: Cursor? = contentResolver?.query(uri, projection, selection, selectionArgs, null)
         cursor?.use {
             while (it.moveToNext()) {
                 val color = it.getInt(it.getColumnIndexOrThrow(Colors.COLOR))
-                val colorKey = it.getInt(it.getColumnIndexOrThrow(Colors.COLOR_KEY))
-                displayColorKeyMap.put(color, colorKey);
-                colors.add(color)
+                val colorKey = it.getString(it.getColumnIndexOrThrow(Colors.COLOR_KEY))
+                if (!colorKey.isNullOrEmpty()) colors.add(Pair(color, colorKey))
             }
-            cursor.close();
             // sort colors by colorValue, since they are loaded unordered
-            colors.sortWith(HsvColorComparator())
+            val comparator = HsvColorComparator()
+            colors.sortWith { left, right -> comparator.compare(left.first, right.first) }
         }
-        return colors.map { Pair(it, displayColorKeyMap[it]!! ) }.toList()
+        return colors
     }
 
-    fun retrieveEventColors(accountName: String): List<Pair<Int, Int>> {
-        return  retrieveColors(accountName, Colors.TYPE_EVENT)
+    fun retrieveEventColors(accountName: String, accountType: String): List<Pair<Int, String>> {
+        return retrieveColors(accountName, accountType, Colors.TYPE_EVENT)
     }
-    fun retrieveCalendarColors(accountName: String): List<Pair<Int, Int>> {
-        return  retrieveColors(accountName, Colors.TYPE_CALENDAR)
+    fun retrieveCalendarColors(accountName: String, accountType: String): List<Pair<Int, String>> {
+        return retrieveColors(accountName, accountType, Colors.TYPE_CALENDAR)
     }
 
-    fun updateCalendarColor(calendarId: Long, newColorKey: Int?, newColor: Int?,
+    fun updateCalendarColor(calendarId: Long, newColorKey: String?, newColor: Int?,
                             pendingChannelResult: MethodChannel.Result) {
         if (pendingChannelResult !is CalendarWriteResult) {
             submitWrite(pendingChannelResult) {

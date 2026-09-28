@@ -88,7 +88,7 @@ class Event {
   int? color;
 
   /// Read-only. Android exclusive. Updatable only using [Event.updateEventColor] with color from [DeviceCalendarPlugin.retrieveEventColors]
-  int? colorKey;
+  String? colorKey;
 
   ///Note for development:
   ///
@@ -171,7 +171,7 @@ class Event {
     title = json['eventTitle'];
     description = json['eventDescription'];
     color = json['eventColor'];
-    colorKey = json['eventColorKey'];
+    colorKey = json['eventColorKey']?.toString();
 
     startTimestamp = json['eventStartDate'];
     startLocationName = json['eventStartTimeZone'];

@@ -209,7 +209,7 @@ internal data class RecurrenceExceptionColorWritePlan(
  */
 internal fun recurrenceExceptionColorWritePlan(
     hasColorChange: Boolean,
-    requestedColorKey: Int?
+    requestedColorKey: String?
 ): RecurrenceExceptionColorWritePlan {
     if (!hasColorChange) {
         return RecurrenceExceptionColorWritePlan(emptyMap(), emptyMap())

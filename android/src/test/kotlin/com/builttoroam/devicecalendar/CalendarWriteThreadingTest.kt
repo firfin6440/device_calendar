@@ -313,7 +313,7 @@ class CalendarWriteThreadingTest {
         await { provider.entered.count == 0L || first.calls.get() > 0 }
         val before = provider.calls.get()
         val second = reply()
-        delegate.updateCalendarColor(7, 3, 0xff123456.toInt(), second)
+        delegate.updateCalendarColor(7, "3", 0xff123456.toInt(), second)
         assertEquals(before, provider.calls.get())
         assertEquals(0, second.calls.get())
         provider.release.countDown()

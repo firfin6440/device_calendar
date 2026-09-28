@@ -42,6 +42,7 @@ private const val UPDATE_CALENDAR_COLOR = "updateCalendarColor"
 private const val CALENDAR_ID_ARGUMENT = "calendarId"
 private const val CALENDAR_NAME_ARGUMENT = "calendarName"
 private const val CALENDAR_ACCOUNT_NAME_ARGUMENT = "accountName"
+private const val CALENDAR_ACCOUNT_TYPE_ARGUMENT = "accountType"
 private const val START_DATE_ARGUMENT = "startDate"
 private const val END_DATE_ARGUMENT = "endDate"
 private const val EVENT_IDS_ARGUMENT = "eventIds"
@@ -312,20 +313,22 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
             }
             RETRIEVE_EVENT_COLORS_METHOD -> {
                 val accountName  = call.argument<String>(CALENDAR_ACCOUNT_NAME_ARGUMENT)
-                if (accountName == null) {
-                    result.success(intArrayOf())
-                    return;
+                val accountType = call.argument<String>(CALENDAR_ACCOUNT_TYPE_ARGUMENT)
+                if (accountName == null || accountType == null) {
+                    result.success(emptyList<List<Any>>())
+                    return
                 }
-                val colors = _calendarDelegate.retrieveEventColors(accountName!!, )
+                val colors = _calendarDelegate.retrieveEventColors(accountName, accountType)
                 result.success(colors.map { listOf(it.first, it.second) })
             }
             RETRIEVE_CALENDAR_COLORS_METHOD -> {
                 val accountName  = call.argument<String>(CALENDAR_ACCOUNT_NAME_ARGUMENT)
-                if (accountName == null) {
-                    result.success(intArrayOf())
-                    return;
+                val accountType = call.argument<String>(CALENDAR_ACCOUNT_TYPE_ARGUMENT)
+                if (accountName == null || accountType == null) {
+                    result.success(emptyList<List<Any>>())
+                    return
                 }
-                val colors = _calendarDelegate.retrieveCalendarColors(accountName)
+                val colors = _calendarDelegate.retrieveCalendarColors(accountName, accountType)
                 result.success(colors.map { listOf(it.first, it.second) })
             }
             UPDATE_CALENDAR_COLOR -> {
@@ -334,7 +337,7 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
                     result.success(false)
                     return
                 }
-                val newColorKey  = (call.argument<Number>(CALENDAR_COLOR_KEY_ARGUMENT))?.toInt()
+                val newColorKey = call.argument<Any>(CALENDAR_COLOR_KEY_ARGUMENT)?.toString()
                 val newColor  = (call.argument<Number>(CALENDAR_COLOR_ARGUMENT))?.toInt()
                 _calendarDelegate.updateCalendarColor(calendarId, newColorKey, newColor, result)
             }
@@ -359,7 +362,7 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
         event.eventURL = call.argument<String>(EVENT_URL_ARGUMENT)
         event.availability = parseAvailability(call.argument<String>(EVENT_AVAILABILITY_ARGUMENT))
         event.eventStatus = parseEventStatus(call.argument<String>(EVENT_STATUS_ARGUMENT))
-        event.eventColorKey = call.argument<Int>(EVENT_COLOR_KEY_ARGUMENT)
+        event.eventColorKey = call.argument<Any>(EVENT_COLOR_KEY_ARGUMENT)?.toString()
 
         if (call.hasArgument(RECURRENCE_RULE_ARGUMENT) && call.argument<Map<String, Any>>(
                 RECURRENCE_RULE_ARGUMENT

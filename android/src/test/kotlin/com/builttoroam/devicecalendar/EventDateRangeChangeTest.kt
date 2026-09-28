@@ -215,12 +215,12 @@ class EventDateRangeChangeTest {
     fun singleOccurrenceColorIsDeferredPastTheExceptionInsert() {
         val plan = recurrenceExceptionColorWritePlan(
             hasColorChange = true,
-            requestedColorKey = 9
+            requestedColorKey = "9"
         )
 
         assertFalse(plan.exceptionInsertValues.containsKey(Events.EVENT_COLOR_KEY))
         assertFalse(plan.exceptionInsertValues.containsKey(Events.EVENT_COLOR))
-        assertEquals(9, plan.eventUpdateValues[Events.EVENT_COLOR_KEY])
+        assertEquals("9", plan.eventUpdateValues[Events.EVENT_COLOR_KEY])
     }
 
     @Test

@@ -30,5 +30,5 @@ class Event {
     var availability: Availability? = null
     var eventStatus: EventStatus? = null
     var eventColor: Int? = null
-    var eventColorKey: Int? = null
+    var eventColorKey: String? = null
 }
