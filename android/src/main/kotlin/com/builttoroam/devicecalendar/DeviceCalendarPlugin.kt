@@ -199,6 +199,11 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
                 if (currentContext == null) result.error("PLUGIN_DETACHED", "Calendar plugin detached", null)
                 else CalendarSplitDebugOptions.handle(currentContext, call, result)
             }
+            "readDeletionRepairSnapshot", "repairDeletion" -> {
+                val currentContext = context
+                if (currentContext == null) result.error("PLUGIN_DETACHED", "Calendar plugin detached", null)
+                else RecentDeletionRepair.handle(currentContext, call, result)
+            }
             "recentRecurrenceClock", "readRecurrenceRepairSnapshot", "repairRecurrencePrefix" -> {
                 val currentContext = context
                 if (currentContext == null) result.error("PLUGIN_DETACHED", "Calendar plugin detached", null)
@@ -362,6 +367,8 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
         event.eventURL = call.argument<String>(EVENT_URL_ARGUMENT)
         event.availability = parseAvailability(call.argument<String>(EVENT_AVAILABILITY_ARGUMENT))
         event.eventStatus = parseEventStatus(call.argument<String>(EVENT_STATUS_ARGUMENT))
+        // Flutter ARGB may arrive as an unsigned Long; Android stores its 32 bits.
+        event.eventColor = call.argument<Number>("eventColor")?.toInt()
         event.eventColorKey = call.argument<Any>(EVENT_COLOR_KEY_ARGUMENT)?.toString()
 
         if (call.hasArgument(RECURRENCE_RULE_ARGUMENT) && call.argument<Map<String, Any>>(

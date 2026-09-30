@@ -61,6 +61,142 @@ class RecurrenceTombstoneRoundTripTest {
     }
     @After fun close() { provider.db.close() }
 
+    @Test fun occurrenceEditPreservesTentativeStatus() = assertOccurrenceStatus(Events.STATUS_TENTATIVE)
+    @Test fun occurrenceEditPreservesConfirmedStatus() = assertOccurrenceStatus(Events.STATUS_CONFIRMED)
+    @Test fun occurrenceEditPreservesConcurrentStatusChange() = assertOccurrenceStatus(
+        Events.STATUS_CONFIRMED, Events.STATUS_TENTATIVE)
+
+    private fun assertOccurrenceStatus(initial: Int, concurrent: Int? = null) {
+        provider.seed(ms(monday), 2, false, false)
+        provider.db.execSQL("UPDATE Events SET eventStatus=$initial, selfAttendeeStatus=0 WHERE _id=21096")
+        if (concurrent != null) provider.beforeBatch = {
+            provider.db.execSQL("UPDATE Events SET eventStatus=$concurrent WHERE _id=21096")
+        }
+        val result = call { delegate, reply -> delegate.applyEventChanges("7", "21096",
+            mapOf("title" to mapOf("expected" to "test-rec", "requested" to "renamed")),
+            target("thisOccurrence", monday), reply) }
+        assertEquals("updated", result.asJsonObject["outcome"].asString)
+        val exception = provider.rows().single { it.getAsString(Events.ORIGINAL_ID) == "21096" }
+        assertEquals(concurrent ?: initial, exception.getAsInteger(Events.STATUS))
+        assertEquals(0, exception.getAsInteger(Events.SELF_ATTENDEE_STATUS))
+    }
+
+    @Test fun deleteMovedOccurrenceCancelsItsOriginalSlotWithoutTouchingSiblings() {
+        provider.seed(ms(monday), 5, true, true)
+        assertTrue(call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+            ms(monday.plusDays(1)), ms(monday.plusDays(1)) + 1, false) }.asBoolean)
+        assertEquals(Events.STATUS_CANCELED, provider.row(21098)!!.getAsInteger(Events.STATUS))
+        assertEquals(listOf(0L, 2L, 3L, 4L).map { ms(monday.plusDays(it)) }, provider.starts(21096))
+        assertEquals(listOf(ms(monday.plusDays(1))), provider.starts(900))
+    }
+    @Test fun deleteGeneratedOccurrenceCreatesCancellationAndKeepsMaster() {
+        provider.seed(ms(monday), 5, true, true)
+        assertTrue(call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+            ms(monday.plusDays(2)), ms(monday.plusDays(2)) + 1, false) }.asBoolean)
+        assertEquals(listOf(ms(monday), ms(monday.plusDays(1).minusHours(1)), ms(monday.plusDays(3)), ms(monday.plusDays(4))), provider.starts(21096))
+        assertEquals(0, provider.row(21096)!!.getAsInteger(Events.DELETED))
+    }
+    @Test fun deleteFollowingUsesOriginalSlotsEvenWhenFutureExceptionMovedIntoThePast() {
+        provider.seed(ms(monday), 5, true, true)
+        provider.db.execSQL("UPDATE Events SET dtstart=${ms(monday.minusDays(3))},dtend=${ms(monday.minusDays(3).plusHours(1))} WHERE _id=21097")
+        assertTrue(call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+            ms(monday.plusDays(2)), ms(monday.plusDays(2)) + 1, true) }.asBoolean)
+        assertEquals(listOf(ms(monday), ms(monday.plusDays(1).minusHours(1))), provider.starts(21096))
+        assertEquals(1, provider.row(21097)!!.getAsInteger(Events.DELETED))
+        assertEquals(listOf(ms(monday.plusDays(1))), provider.starts(900))
+    }
+    @Test fun deleteEntireSeriesAlsoDeletesDetachedRows() {
+        provider.seed(ms(monday), 5, true, true)
+        assertTrue(call { delegate, reply -> delegate.deleteEvent("7", "21096", reply) }.asBoolean)
+        assertTrue(provider.starts(21096).isEmpty())
+        assertEquals(1, provider.row(21098)!!.getAsInteger(Events.DELETED))
+        assertEquals(1, provider.row(21097)!!.getAsInteger(Events.DELETED))
+        assertEquals(listOf(ms(monday.plusDays(1))), provider.starts(900))
+    }
+    @Test fun deleteConcurrentRootChangeAbortsTheWholeBatch() {
+        provider.seed(ms(monday), 5, true, true)
+        provider.beforeBatch = { provider.db.execSQL("UPDATE Events SET rrule='FREQ=DAILY;COUNT=8' WHERE _id=21096") }
+        try {
+            call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+                ms(monday.plusDays(2)), ms(monday.plusDays(2)) + 1, true) }
+            fail("A changed root must reject deletion")
+        } catch (e: AssertionError) { assertTrue(e.message!!.contains("409")) }
+        assertEquals(0, provider.row(21098)!!.getAsInteger(Events.DELETED))
+        assertEquals(0, provider.row(21097)!!.getAsInteger(Events.DELETED))
+        assertEquals("FREQ=DAILY;COUNT=8", provider.row(21096)!!.getAsString(Events.RRULE))
+    }
+    @Test fun deleteNewExceptionWaitsForSyncIdentityWithoutWriting() {
+        provider.seed(ms(monday), 5, false, false)
+        provider.db.execSQL("UPDATE Events SET _sync_id=NULL WHERE _id=21096")
+        try {
+            call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+                ms(monday.plusDays(2)), ms(monday.plusDays(2)) + 1, false) }
+            fail("Unsynced exception creation must wait")
+        } catch (e: AssertionError) { assertTrue(e.message!!.contains("425")) }
+        assertEquals(2, provider.rows().size)
+        assertEquals(5, provider.starts(21096).size)
+    }
+
+    @Test fun movingRemainingOccurrenceDoesNotResurrectDeletedFirstOccurrence() {
+        provider.seed(ms(monday), 2, false, false)
+        assertTrue(call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+            ms(monday), ms(monday) + 1, false) }.asBoolean)
+        assertEquals(listOf(ms(monday.plusDays(1))), provider.starts(21096))
+        move(monday, monday.minusDays(1))
+        assertEquals("Deleted first member must move to Sunday as a cancellation",
+            listOf(ms(monday)), provider.starts(21096))
+        assertTrue(provider.row(21096)!!.getAsString(Events.RRULE).contains("COUNT=2"))
+        move(monday.minusDays(1), monday)
+        assertEquals("Moving back must retain the deletion too",
+            listOf(ms(monday.plusDays(1))), provider.starts(21096))
+    }
+
+    @Test fun resetFieldsDoesNotConfirmACancelledOccurrence() {
+        provider.seed(ms(monday), 2, false, false)
+        call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+            ms(monday), ms(monday) + 1, false) }
+        val result = call { delegate, reply -> delegate.applyEventChanges("7", "21096",
+            mapOf("title" to mapOf("expected" to "test-rec", "requested" to "renamed")),
+            target("entireSeries", monday), reply) }
+        assertEquals("updated", result.asJsonObject["outcome"].asString)
+        assertEquals(listOf(ms(monday.plusDays(1))), provider.starts(21096))
+    }
+
+    @Test fun cancellationStatusChangingDuringResetAbortsAtomically() {
+        provider.seed(ms(monday), 2, true, false)
+        provider.beforeBatch = {
+            provider.db.execSQL("UPDATE Events SET eventStatus=2 WHERE _id=21098")
+        }
+        val result = change(monday, monday.minusDays(1))
+        assertEquals("conflict", result.asJsonObject["outcome"].asString)
+        assertEquals(ms(monday), provider.row(21096)!!.getAsLong(Events.DTSTART))
+    }
+
+    @Test fun cancellationInventoryChangedSinceAmlPlanningRejectsBeforeWriting() {
+        provider.seed(ms(monday), 2, false, false)
+        call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+            ms(monday), ms(monday) + 1, false) }
+        val before = provider.rows()
+        val result = call { delegate, reply -> delegate.applyEventChanges("7", "21096",
+            mapOf("dateRange" to mapOf("expected" to range(monday), "requested" to range(monday.minusDays(1)))),
+            target("entireSeries", monday) + ("expectedCancelledOccurrenceStarts" to emptyList<Long>()), reply) }
+        assertEquals("conflict", result.asJsonObject["outcome"].asString)
+        assertEquals(before, provider.rows())
+    }
+
+    @Test fun movedCancellationWaitsForSyncIdentityWithoutPartialReset() {
+        provider.seed(ms(monday), 2, false, false)
+        call { delegate, reply -> delegate.deleteEvent("7", "21096", reply,
+            ms(monday), ms(monday) + 1, false) }
+        provider.db.execSQL("UPDATE Events SET _sync_id=NULL WHERE _id=21096")
+        val before = provider.rows()
+        try {
+            change(monday, monday.minusDays(1))
+            fail("New cancellation identity must wait for a synced parent")
+        } catch (e: AssertionError) { assertTrue(e.message!!.contains("425")) }
+        assertEquals(before, provider.rows())
+    }
+
     @Test fun capturedSplitThenReturnMustKeepTuesdayPersisted() = replay(split = true)
     @Test fun capturedSplitThenReturnWithReversedSqlRowsMustKeepTuesdayPersisted() =
         replay(split = true, reverse = true)
@@ -428,8 +564,23 @@ internal open class TombstoneCalendarProvider : ContentProvider() {
         }
         return db.query(table(uri), projection, selection(uri, selection), selectionArgs, null, null, sortOrder)
     }
-    override fun insert(uri: Uri, values: ContentValues?): Uri =
-        ContentUris.withAppendedId(uri, db.insertOrThrow(table(uri), null, values))
+    override fun insert(uri: Uri, values: ContentValues?): Uri {
+        if (uri.pathSegments.first() == "exception") {
+            val masterId = uri.lastPathSegment!!.toLong()
+            val master = row(masterId)!!
+            val exception = ContentValues(master).apply {
+                remove(Events._ID); putNull(Events.RRULE); putNull(Events.DURATION); putNull(Events._SYNC_ID)
+                put(Events.ORIGINAL_ID, masterId)
+                put(Events.ORIGINAL_SYNC_ID, master.getAsString(Events._SYNC_ID))
+                put(Events.ORIGINAL_ALL_DAY, master.getAsInteger(Events.ALL_DAY))
+                putAll(values!!)
+                val slot = values.getAsLong(Events.ORIGINAL_INSTANCE_TIME)
+                put(Events.DTSTART, slot); put(Events.DTEND, slot + 3_600_000)
+            }
+            return ContentUris.withAppendedId(Events.CONTENT_URI, db.insertOrThrow("Events", null, exception))
+        }
+        return ContentUris.withAppendedId(uri, db.insertOrThrow(table(uri), null, values))
+    }
     override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<out String>?) =
         db.update(table(uri), values, selection(uri, selection), args)
     override fun delete(uri: Uri, selection: String?, args: Array<out String>?): Int {

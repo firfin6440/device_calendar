@@ -209,7 +209,8 @@ internal data class RecurrenceExceptionColorWritePlan(
  */
 internal fun recurrenceExceptionColorWritePlan(
     hasColorChange: Boolean,
-    requestedColorKey: String?
+    requestedColorKey: String?,
+    requestedColor: Int? = null
 ): RecurrenceExceptionColorWritePlan {
     if (!hasColorChange) {
         return RecurrenceExceptionColorWritePlan(emptyMap(), emptyMap())
@@ -217,7 +218,7 @@ internal fun recurrenceExceptionColorWritePlan(
     val eventUpdateValues = if (requestedColorKey == null) {
         mapOf(
             Events.EVENT_COLOR_KEY to null,
-            Events.EVENT_COLOR to null
+            Events.EVENT_COLOR to requestedColor
         )
     } else {
         mapOf(Events.EVENT_COLOR_KEY to requestedColorKey)

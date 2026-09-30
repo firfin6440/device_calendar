@@ -72,3 +72,30 @@ private fun recurrenceResetEnd(template: EventDateRangeValue, start: Long): Long
 internal fun recurrenceExceptionResetValues(range: EventDateRangeValue): Map<String, Any?> =
     recurrenceStorageChanges(null, range.startDate, range.startTimeZone,
         range.endDate, range.endTimeZone, range.allDay, null)
+
+/** Deletion is membership, not an editable field override. Map its original
+ * recurrence ordinal; missing/new tail positions do not inherit deletions. */
+internal fun recurrenceCancellationResets(
+    cancelledSlots: Collection<Long>, originalRange: EventDateRangeValue,
+    originalRule: String, resultingRange: EventDateRangeValue, resultingRule: String
+): List<RecurrenceExceptionReset> {
+    if (cancelledSlots.isEmpty()) return emptyList()
+    val wanted = cancelledSlots.toSet()
+    val last = wanted.maxOrNull()!!
+    val source = RecurrenceRule(originalRule).iterator(originalRange.startDate,
+        TimeZone.getTimeZone(originalRange.startTimeZone))
+    val destination = RecurrenceRule(resultingRule).iterator(resultingRange.startDate,
+        TimeZone.getTimeZone(resultingRange.startTimeZone))
+    val result = mutableListOf<RecurrenceExceptionReset>()
+    var visited = 0
+    while (source.hasNext()) {
+        check(++visited <= 100000) { "Cancellation mapping exceeds supported recurrence horizon" }
+        val slot = source.nextMillis()
+        if (slot > last) break
+        val next = if (destination.hasNext()) destination.nextMillis() else null
+        if (slot in wanted) result.add(RecurrenceExceptionReset(slot, next?.let {
+            resultingRange.copy(startDate = it, endDate = recurrenceResetEnd(resultingRange, it))
+        }))
+    }
+    return result
+}

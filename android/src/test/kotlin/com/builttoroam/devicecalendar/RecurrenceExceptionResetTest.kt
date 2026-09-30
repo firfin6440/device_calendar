@@ -12,6 +12,26 @@ class RecurrenceExceptionResetTest {
         EventDateRangeValue(ms(start), start.zone.id, ms(end), end.zone.id, false)
     private val monday = at("2026-09-07T19:45:00+01:00[Europe/London]")
 
+    @Test fun cancellationMappingUsesSourceOrdinalAcrossSparseSlotsAndShortening() {
+        val mapped = recurrenceCancellationResets(listOf(ms(monday.plusDays(4)), ms(monday)),
+            range(monday), "FREQ=DAILY;COUNT=5", range(monday.minusDays(1)), "FREQ=WEEKLY;COUNT=3")
+        assertEquals(listOf(ms(monday), ms(monday.plusDays(4))), mapped.map { it.originalSlot })
+        assertEquals(range(monday.minusDays(1)), mapped[0].range)
+        assertNull(mapped[1].range)
+    }
+
+    @Test fun cancellationMappingKeepsLocalTimeAcrossDst() {
+        val source = at("2026-10-24T19:45:00+01:00[Europe/London]")
+        val result = recurrenceCancellationResets(listOf(ms(source.plusDays(1))),
+            range(source), "FREQ=DAILY;COUNT=2", range(source.plusDays(1)), "FREQ=DAILY;COUNT=2").single()
+        assertEquals(range(source.plusDays(2)), result.range)
+    }
+
+    @Test fun cancellationOutsideSourceRuleDoesNotDeleteANewMember() {
+        assertTrue(recurrenceCancellationResets(listOf(ms(monday.plusDays(4))),
+            range(monday), "FREQ=DAILY;COUNT=2", range(monday), "FREQ=DAILY;COUNT=5").isEmpty())
+    }
+
     @Test fun fieldOnlyResetUpdatesTuesdayInsteadOfCancellingIt() {
         val reset = recurrenceExceptionResets(listOf(ms(monday.plusDays(1))), range(monday),
             "FREQ=DAILY;COUNT=2", range(monday), "FREQ=DAILY;COUNT=2").single()

@@ -234,4 +234,18 @@ class EventDateRangeChangeTest {
         assertEquals(null, plan.eventUpdateValues[Events.EVENT_COLOR_KEY])
         assertEquals(null, plan.eventUpdateValues[Events.EVENT_COLOR])
     }
+
+    @Test
+    fun rawSingleOccurrenceColorIsDeferredWithoutInventingAKey() {
+        val rawColor = 0xFF317AC4.toInt()
+        val plan = recurrenceExceptionColorWritePlan(
+            hasColorChange = true,
+            requestedColorKey = null,
+            requestedColor = rawColor
+        )
+
+        assertEquals(emptyMap<String, Any?>(), plan.exceptionInsertValues)
+        assertEquals(null, plan.eventUpdateValues[Events.EVENT_COLOR_KEY])
+        assertEquals(rawColor, plan.eventUpdateValues[Events.EVENT_COLOR])
+    }
 }

@@ -123,6 +123,132 @@ class CalendarInstanceInvalidationTest {
         return reply.value as Map<*, *>
     }
 
+    // September 28 device sequence: a freshly split Wednesday/Thursday root
+    // has no remote identity when Thursday is edited. Expected dates are civil
+    // inputs, not projections returned by the mutation implementation.
+    @Test fun unguardedUnsyncedExceptionReproducesMissingWednesday() =
+        splitThenEditThursday(synced = false)
+
+    @Test fun syncedSplitThursdayEditKeepsWednesdayInInstances() =
+        splitThenEditThursday(synced = true)
+
+    @Test fun guardedUnsyncedExceptionKeepsAllExistingInstances() =
+        splitThenEditThursday(synced = false, guarded = true)
+
+    @Test fun guardedSyncedExceptionKeepsWednesday() =
+        splitThenEditThursday(synced = true, guarded = true)
+
+    @Test fun keyedColourExceptionUsesOnlyTheNewExceptionRow() {
+        provider.db.execSQL("UPDATE Events SET eventColor=-11238163, eventColor_index='9' WHERE _id=21096")
+        val before = provider.row(21096)!!
+        val unrelated = provider.row(900)!!
+        assertEquals((0L..6L).map { day(it) }, read(21096))
+        val reply = Reply().also { replies.add(it) }
+        delegate().applyEventChanges("7", "21096",
+            mapOf("color" to mapOf(
+                "expected" to mapOf("color" to -11238163, "colorKey" to "9"),
+                "requested" to mapOf("color" to -2350809, "colorKey" to "11"))),
+            mapOf("scope" to "thisOccurrence", "originalEventId" to "21096",
+                "originalOccurrenceStart" to day(1), "selectedOccurrenceWasDetached" to false,
+                "requireExceptionSyncIdentity" to true), reply)
+        waitFor(reply)
+        val exception = updated(reply)
+        val row = provider.row(exception)!!
+        assertEquals("11", row.getAsString(Events.EVENT_COLOR_KEY))
+        assertEquals(21096L, row.getAsLong(Events.ORIGINAL_ID).toLong())
+        assertEquals(day(1), row.getAsLong(Events.ORIGINAL_INSTANCE_TIME).toLong())
+        assertEquals(before, provider.row(21096))
+        assertEquals(unrelated, provider.row(900))
+        assertEquals(1, provider.commits)
+        assertEquals(listOf(day(1)), read(exception))
+        assertEquals(listOf(0L, 2L, 3L, 4L, 5L, 6L).map { day(it) }, read(21096))
+    }
+
+    private fun splitThenEditThursday(synced: Boolean, guarded: Boolean = false) {
+        provider.db.execSQL("UPDATE Events SET rrule='FREQ=DAILY;COUNT=4' WHERE _id=21096")
+        assertEquals(listOf(day(0), day(1), day(2), day(3)), read(21096))
+        val successor = updated(split(21096, day(2)))
+        assertNull(provider.row(successor)!!.getAsString(Events._SYNC_ID))
+        assertEquals(listOf(day(0), day(1)), read(21096))
+        assertEquals(listOf(day(2), day(3)), read(successor))
+        if (synced) provider.db.execSQL(
+            "UPDATE Events SET _sync_id='remote-successor', dirty=0 WHERE _id=?",
+            arrayOf<Any>(successor)
+        )
+        val before = provider.row(successor)!!
+        val unrelated = read(900)
+        fun range(at: Long) = mapOf("startDate" to at, "endDate" to at + 3_600_000L,
+            "startTimeZone" to "Europe/London", "endTimeZone" to "Europe/London", "allDay" to false)
+        val commitsBefore = provider.commits
+        val reply = Reply().also { replies.add(it) }
+        delegate().applyEventChanges("7", "$successor",
+            mapOf("dateRange" to mapOf("expected" to range(day(3)),
+                "requested" to range(day(3) - 7_200_000L))),
+            mapOf("scope" to "thisOccurrence", "originalEventId" to "$successor",
+                "originalOccurrenceStart" to day(3), "selectedOccurrenceWasDetached" to false,
+                "requireExceptionSyncIdentity" to guarded), reply)
+        waitFor(reply)
+        if (guarded && !synced) {
+            assertTrue(reply.error.toString(), reply.error?.startsWith("425:") == true)
+            assertEquals(commitsBefore, provider.commits)
+            assertEquals(listOf(day(2), day(3)), read(successor))
+            assertEquals(before, provider.row(successor))
+            assertEquals(listOf(day(0), day(1)), read(21096))
+            assertEquals(unrelated, read(900))
+            return
+        }
+        val exception = updated(reply)
+        assertEquals(successor, provider.row(exception)!!.getAsLong(Events.ORIGINAL_ID).toLong())
+        assertEquals(day(3), provider.row(exception)!!.getAsLong(Events.ORIGINAL_INSTANCE_TIME).toLong())
+        assertEquals(listOf(day(3) - 7_200_000L), read(exception))
+        val after = provider.row(successor)!!
+        assertEquals(before.getAsLong(Events.DTSTART), after.getAsLong(Events.DTSTART))
+        assertEquals(before.getAsString(Events.RRULE), after.getAsString(Events.RRULE))
+        assertEquals(0, after.getAsInteger(Events.DELETED).toInt())
+        assertEquals(listOf(day(0), day(1)), read(21096))
+        assertEquals(unrelated, read(900))
+        // Query twice: already-expanded range reads must not heal the defect.
+        val firstRead = read(successor)
+        val secondRead = read(successor)
+        val expected = if (synced) listOf(day(2)) else emptyList()
+        assertEquals("Synced exception preserves Wednesday; unguarded no-sync reproduces the provider defect", expected, firstRead)
+        assertEquals(expected, secondRead)
+    }
+
+    @Test fun guardedRsvpCannotEraseSiblingsBeforeSync() {
+        provider.db.execSQL("UPDATE Events SET _sync_id=NULL WHERE _id=21096")
+        val before = read(21096)
+        val rows = provider.rows()
+        val reply = Reply().also { replies.add(it) }
+        delegate().updateAttendeeStatus("7", "21096", "owner@example.com", 1, 4,
+            mapOf("scope" to "thisOccurrence", "originalEventId" to "21096",
+                "originalOccurrenceStart" to day(3), "selectedOccurrenceWasDetached" to false,
+                "requireExceptionSyncIdentity" to true), reply)
+        waitFor(reply)
+        assertTrue(reply.error.toString(), reply.error?.startsWith("425:") == true)
+        assertEquals(0, provider.commits)
+        assertEquals(rows, provider.rows())
+        assertEquals(before, read(21096))
+    }
+
+    @Test fun syncIdentityDisappearingBetweenReadAndBatchCannotInsertException() {
+        provider.db.execSQL("UPDATE Events SET _sync_id='remote-master' WHERE _id=21096")
+        val before = read(21096)
+        provider.beforeBatch = { provider.db.execSQL("UPDATE Events SET _sync_id=NULL WHERE _id=21096") }
+        val reply = Reply().also { replies.add(it) }
+        delegate().applyEventChanges("7", "21096",
+            mapOf("title" to mapOf("expected" to "test-rec", "requested" to "changed")),
+            mapOf("scope" to "thisOccurrence", "originalEventId" to "21096",
+                "originalOccurrenceStart" to day(3), "selectedOccurrenceWasDetached" to false,
+                "requireExceptionSyncIdentity" to true), reply)
+        waitFor(reply)
+        assertTrue(reply.error.toString(), reply.error?.startsWith("425:") == true)
+        assertEquals(0, provider.commits)
+        assertEquals(2, provider.rows().size)
+        assertEquals(before, read(21096))
+        assertEquals("test-rec", provider.row(21096)!!.getAsString(Events.TITLE))
+    }
+
     @Test fun developerOmissionIsOffByDefault() {
         assertEquals(mapOf("enabled" to false, "persistAcrossRestarts" to false), debugOption())
         splitCase(true, true)
@@ -356,14 +482,14 @@ internal class CachedInstancesProvider : TombstoneCalendarProvider() {
                 (sync != null && it.getAsString(Events.ORIGINAL_SYNC_ID) == sync)) }
             .map { it.getAsLong(Events._ID) }.toSet() + event.getAsLong(Events._ID)
     }
-    private fun refresh(ids: Set<Long>?) {
+    private fun refresh(ids: Set<Long>?, expansionIds: Set<Long>? = ids) {
         if (ids == null) db.delete("Instances", null, null)
         else ids.forEach { db.delete("Instances", "event_id=?", arrayOf("$it")) }
         val all = rows()
         val exceptions = all.filter { it.getAsLong(Events.ORIGINAL_INSTANCE_TIME) != null }
         for (row in all) {
             val id = row.getAsLong(Events._ID)
-            if (ids != null && id !in ids || row.getAsInteger(Events.DELETED) == 1 || row.getAsInteger(Events.STATUS) == 2) continue
+            if (expansionIds != null && id !in expansionIds || row.getAsInteger(Events.DELETED) == 1 || row.getAsInteger(Events.STATUS) == 2) continue
             val start = row.getAsLong(Events.DTSTART)
             val duration = row.getAsLong(Events.DTEND)?.minus(start)
                 ?: parseDurationMillis(row.getAsString(Events.DURATION))!!
@@ -406,6 +532,37 @@ internal class CachedInstancesProvider : TombstoneCalendarProvider() {
         return count
     }
     override fun insert(uri: Uri, values: ContentValues?): Uri {
+        if (uri.pathSegments.dropLast(1) == Events.CONTENT_EXCEPTION_URI.pathSegments) {
+            val masterId = uri.lastPathSegment!!.toLong()
+            val master = row(masterId)!!
+            val exception = ContentValues(master).apply {
+                remove(Events._ID)
+                remove(Events._SYNC_ID)
+                remove(Events.RRULE)
+                remove(Events.RDATE)
+                remove(Events.EXRULE)
+                remove(Events.EXDATE)
+                remove(Events.DURATION)
+                putAll(values!!)
+                put(Events.ORIGINAL_ID, masterId)
+                put(Events.ORIGINAL_SYNC_ID, master.getAsString(Events._SYNC_ID))
+                put(Events.ORIGINAL_ALL_DAY, master.getAsInteger(Events.ALL_DAY))
+                put(Events.DIRTY, 1)
+            }
+            val inserted = super.insert(Events.CONTENT_URI, exception)
+            if (expanded) {
+                val changedId = ContentUris.parseId(inserted)
+                val familyIds = family(row(changedId)!!)
+                // Installed Samsung CalendarProvider a.f.i: offsets 0xef..0x10d
+                // delete by original_id when both sync identities are absent;
+                // 0x13b..0x14d then expand _id=changedId, NOT the whole family.
+                // The sync-ID branch expands the family. Keep these two sets
+                // separate; refreshing the family unconditionally hides the bug.
+                refresh(familyIds, if (master.getAsString(Events._SYNC_ID) == null)
+                    setOf(changedId) else familyIds)
+            }
+            return inserted
+        }
         val inserted = super.insert(uri, values)
         if (expanded && uri.pathSegments.first() == "events") refresh(family(row(ContentUris.parseId(inserted))!!))
         return inserted

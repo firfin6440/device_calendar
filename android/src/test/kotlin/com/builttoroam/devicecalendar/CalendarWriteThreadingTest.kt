@@ -119,6 +119,68 @@ class CalendarWriteThreadingTest {
         threads()
     }
 
+    @Test fun rawEventColorPersistsWithoutAKeyAndCanBeCleared() {
+        val rawColor = 0xFF317AC4.toInt()
+        fun color(value: Int?) = mapOf<String, Any?>("color" to value, "colorKey" to null)
+        fun write(expected: Int?, requested: Int?): Reply = reply().also {
+            delegate.applyEventChanges("7", "21096", mapOf("color" to mapOf(
+                "expected" to color(expected), "requested" to color(requested))), null, it)
+        }
+
+        updated(write(null, rawColor))
+        assertEquals(rawColor, provider.row(21096)!!.getAsInteger(Events.EVENT_COLOR))
+        assertNull(provider.row(21096)!!.getAsString(Events.EVENT_COLOR_KEY))
+
+        updated(write(rawColor, null))
+        assertNull(provider.row(21096)!!.getAsInteger(Events.EVENT_COLOR))
+        assertNull(provider.row(21096)!!.getAsString(Events.EVENT_COLOR_KEY))
+        threads()
+    }
+
+    @Test fun methodChannelCreationPreservesRawColor() = channelCreationColor(0xFFAD0100L, null)
+    @Test fun methodChannelCreationPreservesSignedColor() = channelCreationColor(0xFFAD0100.toInt(), null)
+    @Test fun methodChannelCreationPreservesKeyedColor() = channelCreationColor(0xFFAD0100L, "11")
+    @Test fun methodChannelCreationPreservesDefaultColor() = channelCreationColor(null, null)
+
+    private fun channelCreationColor(color: Number?, key: String?) {
+        val plugin = DeviceCalendarPlugin()
+        DeviceCalendarPlugin::class.java.getDeclaredField("_calendarDelegate").apply {
+            isAccessible = true
+            set(plugin, delegate)
+        }
+        val result = reply()
+        plugin.onMethodCall(io.flutter.plugin.common.MethodCall("createOrUpdateEvent", mapOf(
+            "calendarId" to "7", "eventTitle" to "test-rec",
+            "eventStartDate" to start, "eventEndDate" to start + 3600000L,
+            "eventColor" to color, "eventColorKey" to key
+        )), result)
+        finished(result)
+        assertNull("Native error: ${result.error}", result.error)
+        val saved = provider.row(result.value.toString().toLong())!!
+        assertEquals(color?.toInt(), saved.getAsInteger(Events.EVENT_COLOR))
+        assertEquals(key, saved.getAsString(Events.EVENT_COLOR_KEY))
+        threads()
+    }
+
+    @Test fun rawEventColorCreationPersistsWithoutAKey() {
+        val rawColor = 0xFF317AC4.toInt()
+        val event = Event().apply {
+            eventTitle = "Custom color"
+            eventStartDate = start
+            eventEndDate = start + 3600000
+            eventColor = rawColor
+            eventColorKey = null
+        }
+        val result = reply()
+        delegate.createOrUpdateEvent("7", event, result)
+        finished(result)
+        assertNull("Native error: ${result.error}", result.error)
+        val saved = provider.row(result.value.toString().toLong())!!
+        assertEquals(rawColor, saved.getAsInteger(Events.EVENT_COLOR))
+        assertNull(saved.getAsString(Events.EVENT_COLOR_KEY))
+        threads()
+    }
+
     @Test fun replacementDirectReadDoesNotRaceOutstandingOldWrite() = replacementRead(false)
     @Test fun replacementRangeReadDoesNotRaceOutstandingOldWrite() = replacementRead(true)
     private fun replacementRead(range: Boolean) {

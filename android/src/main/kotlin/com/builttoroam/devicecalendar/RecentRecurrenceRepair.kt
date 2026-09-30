@@ -209,7 +209,7 @@ internal object RecentRecurrenceRepair {
         }
     }
 
-    private fun clock(context: Context): Map<String, Any> {
+    fun clock(context: Context): Map<String, Any> {
         val boot = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
         val device = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         return mapOf("epoch" to if (boot < 0 || device.isNullOrBlank()) "" else "$device:$boot",
