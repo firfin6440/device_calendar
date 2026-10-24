@@ -12,6 +12,7 @@ import 'package:timezone/data/latest.dart' as tz;
 import 'common/channel_constants.dart';
 import 'common/error_codes.dart';
 import 'common/error_messages.dart';
+import 'common/diagnostic_log.dart';
 
 /// Decodes one native range reply. The caller may run this on an isolate, but
 /// must preserve the complete/partial result alongside the surviving rows.
@@ -83,9 +84,7 @@ class DeviceCalendarPlugin {
       if (identical(_nativeDebugLoggingConfiguration, configuration)) {
         _nativeDebugLoggingConfiguration = null;
       }
-      if (kDebugMode) {
-        debugPrint('Could not configure native calendar diagnostics: $error');
-      }
+      deviceCalendarDiagnostic(DeviceCalendarDiagnostic.configurationFailed);
     }
   }
 
@@ -341,7 +340,7 @@ class DeviceCalendarPlugin {
             currentStatusIndex < 0 ||
             currentStatusIndex >= AndroidAttendanceStatus.values.length) {
           throw FormatException(
-            'Invalid attendee status update response: $rawData',
+            'Invalid attendee status update response',
           );
         }
 
@@ -358,7 +357,7 @@ class DeviceCalendarPlugin {
             break;
           default:
             throw FormatException(
-              'Unknown attendee status update result: $rawData',
+              'Unknown attendee status update result',
             );
         }
 
@@ -439,7 +438,7 @@ class DeviceCalendarPlugin {
             outcome = EventChangeOutcome.conflict;
             break;
           default:
-            throw FormatException('Unknown event change result: $rawData');
+            throw FormatException('Unknown event change result');
         }
 
         final Set<EventChangeField> conflictingFields =
@@ -463,7 +462,7 @@ class DeviceCalendarPlugin {
             case 'recurrence':
               return EventChangeField.recurrence;
             default:
-              throw FormatException('Unknown conflicting field: $field');
+              throw FormatException('Unknown conflicting field');
           }
         }).toSet();
         final Map<Object?, Object?> currentValues =
@@ -782,22 +781,85 @@ class DeviceCalendarPlugin {
     if (!Platform.isAndroid) {
       return [];
     }
-    final accountName = calendar.accountName;
-    final accountType = calendar.accountType;
-    if (accountName == null || accountType == null) {
-      return [];
-    }
-    final dynamic colors = await _invokeChannelMethod(
-      ChannelConstants.methodNameRetrieveCalendarColors,
-      arguments: () => <String, String>{
-        ChannelConstants.parameterAccountName: accountName,
-        ChannelConstants.parameterAccountType: accountType,
+    final result = await retrieveCalendarColorOptions(calendar);
+    if (!result.isSuccess) throw StateError('Could not read calendar colours');
+    return result.data!;
+  }
+
+  /// Android account-scoped calendar palette. An unavailable read is an error,
+  /// never an empty palette. This also supports an explicitly owned transport.
+  Future<Result<List<CalendarColor>>> retrieveCalendarColorOptions(
+          Calendar calendar) =>
+      _invokeChannelMethod<List<CalendarColor>>(
+        ChannelConstants.methodNameRetrieveCalendarColors,
+        arguments: () {
+          if (calendar.accountName == null || calendar.accountType == null) {
+            throw ArgumentError('Calendar account identity is required');
+          }
+          return <String, Object?>{
+            ChannelConstants.parameterAccountName: calendar.accountName,
+            ChannelConstants.parameterAccountType: calendar.accountType,
+          };
+        },
+        evaluateResponse: (dynamic value) {
+          if (value is! List)
+            throw const FormatException('Invalid calendar palette');
+          final keys = <String>{};
+          return value.map((dynamic row) {
+            if (row is! List ||
+                row.length != 2 ||
+                row[0] is! int ||
+                row[1] is! String ||
+                (row[1] as String).isEmpty ||
+                !keys.add(row[1] as String)) {
+              throw const FormatException('Invalid calendar colour row');
+            }
+            return CalendarColor(row[0] as int, row[1] as String);
+          }).toList(growable: false);
+        },
+      );
+
+  /// Android calendar colour write guarded by the calendar account and opening colour.
+  /// Uses provider readback, never guesses the saved RGB from the requested key.
+  /// A transport/readback failure may occur after commit; do not replay blindly.
+  Future<Result<CalendarColorUpdateResult>> updateCalendarColorVerified(
+      Calendar calendar,
+      {CalendarColor? calendarColor,
+      Color? color}) async {
+    final result = await _invokeChannelMethod<CalendarColorUpdateResult>(
+      ChannelConstants.methodNameUpdateCalendarColor,
+      arguments: () {
+        final id = int.tryParse(calendar.id ?? '');
+        if (id == null ||
+            id <= 0 ||
+            calendar.accountName == null ||
+            calendar.accountType == null ||
+            (calendarColor == null) == (color == null) ||
+            calendarColor?.colorKey.isEmpty == true) {
+          throw ArgumentError('Calendar and palette identity are required');
+        }
+        return <String, Object?>{
+          ChannelConstants.parameterNameCalendarId: id,
+          if (calendarColor != null)
+            ChannelConstants.parameterNameCalendarColorKey:
+                calendarColor.colorKey,
+          if (color != null)
+            ChannelConstants.parameterNameCalendarColor: color.toARGB32(),
+          'verified': true,
+          'expectedAccountName': calendar.accountName,
+          'expectedAccountType': calendar.accountType,
+          'expectedColor': calendar.color,
+          'expectedColorKey': calendar.colorKey,
+        };
       },
+      evaluateResponse: (dynamic value) =>
+          CalendarColorUpdateResult.fromMap(value),
     );
-    return (colors.data as List)
-        .cast<List>()
-        .map((color) => CalendarColor(color[0] as int, color[1].toString()))
-        .toList();
+    if (result.isSuccess) {
+      calendar.color = result.data!.color;
+      calendar.colorKey = result.data!.colorKey;
+    }
+    return result;
   }
 
   /// Updates the color of a calendar using Google Calendar colors or platform-specific colors.
@@ -809,8 +871,13 @@ class DeviceCalendarPlugin {
   Future<bool> updateCalendarColor(Calendar calendar,
       {CalendarColor? calendarColor, Color? color}) async {
     final calendarId = calendar.id;
-    if (calendarId == null || color == null && calendarColor == null) {
+    if (calendarId == null || (color == null) == (calendarColor == null)) {
       return false;
+    }
+    if (Platform.isAndroid && calendarColor != null) {
+      final verified = await updateCalendarColorVerified(calendar,
+          calendarColor: calendarColor);
+      return verified.isSuccess && verified.data!.applied;
     }
     final result = await _invokeChannelMethod(
       ChannelConstants.methodNameUpdateCalendarColor,
@@ -824,6 +891,7 @@ class DeviceCalendarPlugin {
     final success = (result.data as bool?) ?? false;
     if (success) {
       calendar.color = color?.value ?? calendarColor?.color;
+      calendar.colorKey = calendarColor?.colorKey;
     }
     return success;
   }
@@ -858,54 +926,24 @@ class DeviceCalendarPlugin {
       } else {
         result.data = rawData;
       }
-    } catch (e, s) {
-      if (kDebugMode && e is ArgumentError) {
-        debugPrint(
-            "INVOKE_CHANNEL_METHOD_ERROR! Name: ${e.name}, InvalidValue: ${e.invalidValue}, Message: ${e.message}, ${e.toString()}");
-      }
-      if (kDebugMode) {
-        debugPrint('INVOKE_CHANNEL_METHOD_ERROR: $e\n$s');
-      }
-      _parsePlatformExceptionAndUpdateResult<T>(
-        e is Exception ? e : Exception(e.toString()),
-        result,
-      );
+    } catch (error) {
+      deviceCalendarDiagnostic(DeviceCalendarDiagnostic.channelFailed);
+      _parsePlatformExceptionAndUpdateResult<T>(error, result);
     }
 
     return result;
   }
 
+  // Keep the classification used by compare-and-set/recovery, but never put
+  // provider messages, rejected arguments or stack strings into result errors.
   void _parsePlatformExceptionAndUpdateResult<T>(
-      Exception? exception, Result<T> result) {
-    if (exception == null) {
-      result.errors.add(
-        const ResultError(
-          ErrorCodes.unknown,
-          ErrorMessages.unknownDeviceIssue,
-        ),
-      );
-      return;
-    }
-
-    if (kDebugMode) debugPrint('$exception');
-
-    if (exception is PlatformException) {
-      final int errorCode =
-          int.tryParse(exception.code) ?? ErrorCodes.platformSpecific;
-      result.errors.add(
-        ResultError(
-          errorCode,
-          '${ErrorMessages.unknownDeviceExceptionTemplate}, Code: ${exception.code}, Exception: ${exception.message}',
-        ),
-      );
-    } else {
-      result.errors.add(
-        ResultError(
-          ErrorCodes.generic,
-          '${ErrorMessages.unknownDeviceGenericExceptionTemplate} ${exception.toString}',
-        ),
-      );
-    }
+      Object? error, Result<T> result) {
+    final code = error == null
+        ? ErrorCodes.unknown
+        : error is PlatformException
+            ? int.tryParse(error.code) ?? ErrorCodes.platformSpecific
+            : ErrorCodes.generic;
+    result.errors.add(ResultError(code, ErrorMessages.unknownDeviceIssue));
   }
 
   void _assertParameter<T>(
@@ -914,9 +952,6 @@ class DeviceCalendarPlugin {
     int errorCode,
     String errorMessage,
   ) {
-    if (kDebugMode && result.data != null) {
-      debugPrint("RESULT of _assertParameter: ${result.data}");
-    }
     if (!predicate) {
       result.errors.add(
         ResultError(errorCode, errorMessage),

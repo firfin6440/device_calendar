@@ -333,8 +333,7 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
                     result.success(emptyList<List<Any>>())
                     return
                 }
-                val colors = _calendarDelegate.retrieveCalendarColors(accountName, accountType)
-                result.success(colors.map { listOf(it.first, it.second) })
+                _calendarDelegate.retrieveCalendarColors(accountName, accountType, result)
             }
             UPDATE_CALENDAR_COLOR -> {
                 val calendarId  = call.argument<Number>(CALENDAR_ID_ARGUMENT)?.toLong()
@@ -344,7 +343,20 @@ class DeviceCalendarPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, Ev
                 }
                 val newColorKey = call.argument<Any>(CALENDAR_COLOR_KEY_ARGUMENT)?.toString()
                 val newColor  = (call.argument<Number>(CALENDAR_COLOR_ARGUMENT))?.toInt()
-                _calendarDelegate.updateCalendarColor(calendarId, newColorKey, newColor, result)
+                if (call.argument<Boolean>("verified") == true) {
+                    val accountName = call.argument<String>("expectedAccountName")
+                    val accountType = call.argument<String>("expectedAccountType")
+                    if (accountName == null || accountType == null || (newColorKey == null) == (newColor == null)) {
+                        result.error("calendar_colour_invalid", "Calendar account and exactly one colour selection are required", null)
+                        return
+                    }
+                    _calendarDelegate.updateCalendarColorVerified(calendarId, newColorKey, newColor,
+                        accountName, accountType,
+                        call.argument<Number>("expectedColor")?.toInt(),
+                        call.argument<String>("expectedColorKey"), result)
+                } else {
+                    _calendarDelegate.updateCalendarColor(calendarId, newColorKey, newColor, result)
+                }
             }
             else -> {
                 result.notImplemented()

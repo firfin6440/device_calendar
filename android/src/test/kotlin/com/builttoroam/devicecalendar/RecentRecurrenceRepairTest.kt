@@ -78,11 +78,13 @@ class RecentRecurrenceRepairTest {
         assertTrue(repair(snapshot()))
         val audit = ShadowLog.getLogsForTag("KeepCalSyncRepair").single()
         assertEquals(Log.INFO, audit.type)
-        assertTrue(audit.msg.startsWith("applied "))
-        assertTrue(audit.msg.contains("\"calendar\":\"7\""))
-        assertTrue(audit.msg.contains("\"root\":\"21096\""))
-        assertTrue(audit.msg.contains("\"field\":\"rrule\""))
-        assertTrue(audit.msg.contains("\"repairId\":\"test-action:2\""))
+        assertTrue(audit.msg.startsWith("recurrenceRepairApplied "))
+        assertTrue(audit.msg.contains("calendar=[calendar:"))
+        assertTrue(audit.msg.contains("root=[event:"))
+        assertTrue(audit.msg.contains("repair=[identifier:"))
+        assertFalse(audit.msg.contains("21096"))
+        assertFalse(audit.msg.contains("test-action:2"))
+        assertNull(audit.throwable)
         assertTrue(audit.msg.length < 600)
         for (sensitive in listOf("title", "description", "attendees", "_sync_id", "FREQ=")) {
             assertFalse(audit.msg.contains(sensitive))
@@ -101,7 +103,7 @@ class RecentRecurrenceRepairTest {
         assertFalse(repair(rows))
         assertEquals(1, ShadowLog.getLogsForTag("KeepCalSyncRepair").size)
     }
-    @Test fun nativeRejectionReasonAndStackAreOptInAndCorrelated() {
+    @Test fun nativeRejectionUsesAliasesWithoutMessagesOrStacks() {
         val rows = snapshot()
         provider.beforeBatch = { provider.db.execSQL("UPDATE Events SET deleted=1 WHERE _id=900") }
         assertFalse(repair(rows))
@@ -109,9 +111,11 @@ class RecentRecurrenceRepairTest {
         assertFalse(RecentRecurrenceRepair.apply(resolver, "7", listOf("21096", "900"),
             rows, "21096", "FREQ=DAILY;COUNT=1", "debug-action:3", true))
         val detail = ShadowLog.getLogsForTag("KeepCalSyncRepairDebug").single()
-        assertTrue(detail.msg.contains("debug-action:3"))
-        assertTrue(detail.msg.startsWith("rejected "))
-        assertNotNull(detail.throwable)
+        assertFalse(detail.msg.contains("debug-action:3"))
+        assertTrue(detail.msg.contains("repair=[identifier:"))
+        assertTrue(detail.msg.startsWith("recurrenceRepairFailed "))
+        assertTrue(detail.msg.contains("outcome=rejected"))
+        assertNull(detail.throwable)
         assertTrue(ShadowLog.getLogsForTag("KeepCalSyncRepair").isEmpty())
     }
     @Test fun appliedAuditExistsBeforeReplyAndSurvivesReplyDeliveryFailure() {

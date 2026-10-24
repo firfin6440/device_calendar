@@ -8,7 +8,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.CalendarContract
 import android.provider.CalendarContract.Events
-import android.util.Log
+import com.builttoroam.devicecalendar.diagnostics.*
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import org.dmfs.rfc5545.recur.RecurrenceRule
@@ -192,8 +192,10 @@ internal object RecentDeletionRepair {
         effect["prefixRule"]?.let { prefix ->
             ops.add(ContentProviderOperation.newUpdate(Events.CONTENT_URI)
                 .withSelection("_id=? AND calendar_id=? AND deleted=0", arrayOf(root, calendar))
-                .withValue(Events.RRULE, prefix as String)
-                .withValue(Events.DTSTART, master.getValue(Events.DTSTART)!!.toLong()).withExpectedCount(1).build())
+                .withValues(recurrencePrefixStorageChanges(prefix as String,
+                    master.getValue(Events.DTSTART)!!.toLong(),
+                    master[Events.DTEND]?.toLong(), master[Events.DURATION]))
+                .withExpectedCount(1).build())
         }
         effect["insertSlot"]?.let { boundary ->
             ops.add(ContentProviderOperation.newInsert(ContentUris.withAppendedId(Events.CONTENT_EXCEPTION_URI, root.toLong()))
@@ -201,9 +203,7 @@ internal object RecentDeletionRepair {
         }
         return try {
             resolver.applyBatch(CalendarContract.AUTHORITY, ops)
-            runCatching { Log.i("KeepCalSyncRepair", "applied " + JSONObject(mapOf(
-                "repairId" to repairId.take(120), "calendar" to calendar, "root" to root,
-                "operation" to "restore-deletion", "scope" to scope)).toString()) }
+            runCatching { NativeDiagnostics.record(ProviderDiagnostic.deletionRepairApplied) { mapOf(DiagnosticField.repair to id(repairId), DiagnosticField.calendar to calendar(calendar), DiagnosticField.root to event(root), DiagnosticField.stage to step(scope)) } }
             true
         } catch (_: android.content.OperationApplicationException) { false }
     }

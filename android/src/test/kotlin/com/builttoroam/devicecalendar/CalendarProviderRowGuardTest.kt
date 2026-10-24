@@ -90,7 +90,7 @@ class CalendarProviderRowGuardTest {
             runAtomicCalendarWrite { provider.applyBatch(arrayListOf(update, invalid)) }
         }
         assertEquals("422", rejection.code)
-        assertTrue(rejection.cause is SQLiteException)
+        assertNull(rejection.cause) // No raw SQL/provider cause in the diagnostic wrapper.
         assertEquals("20:45", provider.start())
     }
 

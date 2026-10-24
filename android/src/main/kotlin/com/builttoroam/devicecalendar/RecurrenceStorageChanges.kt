@@ -14,13 +14,23 @@ internal fun shouldReplaceRecurringSeries(
 /** Narrow update of an existing recurring root, not a whole-event rewrite.
  * CalendarProvider passes only modified columns to its Instances updater:
  * without DTSTART an RRULE update succeeds but leaves cached occurrences stale.
- * With RRULE + DTSTART it re-reads the stored recurrence for expansion, so do
- * not rewrite duration/timezone/other fields just to trigger invalidation.
- * The caller must guard this authoritative start and the recurrence basis in
- * the SAME provider transaction; never use a selected occurrence's start. */
-internal fun recurrencePrefixStorageChanges(rawRule: String, masterStart: Long): ContentValues =
+ * Recalculation of LAST_DATE treats ANY nonnull DTEND literally, including 0.
+ * Canonicalize that missing-end sentinel in this authorized write, or the
+ * surviving prefix can disappear from subsequent Instances expansion. Do not
+ * invent a duration or rewrite unrelated columns. Callers must guard ALL raw
+ * timing and recurrence fields in the SAME transaction, including zero vs NULL.
+ * Never use a selected occurrence's start as the master start. */
+internal fun recurrencePrefixStorageChanges(
+    rawRule: String, masterStart: Long, rawEnd: Long?, duration: String?
+): ContentValues =
     ContentValues().apply {
         require(rawRule.isNotBlank())
+        if (rawEnd == 0L) {
+            require(resolveStoredEventEndMillis(masterStart, rawEnd, duration) != null) {
+                "Cannot normalize an unknown recurring end"
+            }
+            putNull(Events.DTEND)
+        }
         put(Events.RRULE, rawRule)
         put(Events.DTSTART, masterStart)
     }
@@ -53,6 +63,8 @@ internal fun recurrenceStorageChanges(
         put(Events.EVENT_END_TIMEZONE, endTimeZone)
         put(Events.DURATION, null)
     } else {
+        // Zero is tolerated only when reading provider storage. Every
+        // recurrence/date rewrite explicitly writes canonical SQL NULL.
         put(Events.DTEND, null)
         put(Events.EVENT_END_TIMEZONE, null)
         put(Events.DURATION, duration)

@@ -50,7 +50,7 @@ class RecentRecurrenceLimitRepairTest {
         assertEquals(before.size, provider.rows().size)
         assertFalse(repair(rows))
         val log = ShadowLog.getLogsForTag("KeepCalSyncRepair").single()
-        assertTrue(log.msg.contains("restore-recurrence-limit"))
+        assertTrue(log.msg.contains("operation=recurrenceLimit"))
     }
 
     @Test fun supportsCountAndUntilInBothDirectionsWithoutChangingPattern() {

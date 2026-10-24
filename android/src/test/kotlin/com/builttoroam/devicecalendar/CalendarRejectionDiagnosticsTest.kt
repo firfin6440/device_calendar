@@ -20,25 +20,25 @@ class CalendarRejectionDiagnosticsTest {
         })
     }
 
-    @Test fun renamedTestEventIsStillWatchedAndBatchCauseIsPreserved() {
+    @Test fun renamedTestEventIsStillWatchedWithoutRawBatchCause() {
         val failure = OperationApplicationException("Expected 1 rows but actual 0")
         val result = calendarRejectionDiagnostics(true,
             listOf("renamed", "TEST-REC 🥕", null), "occurrence.atomicBatch", failure) {
             mapOf("expected" to null, "actual" to 123L)
         }!!
-        assertTrue(result.containsKey("expected"))
-        assertEquals(123L, result["actual"])
+        assertFalse(result.containsKey("expected"))
+        assertFalse(result.containsKey("actual"))
         assertEquals("occurrence.atomicBatch", result["stage"])
-        assertEquals(failure.javaClass.name, result["batchExceptionType"])
-        assertEquals(failure.message, result["batchExceptionMessage"])
+        assertEquals("other", result["batchExceptionType"])
+        assertFalse(result.containsKey("batchExceptionMessage"))
     }
 
     @Test fun diagnosticFailureIsContained() {
         val result = calendarRejectionDiagnostics(true, listOf("test-rec"), "stage") {
             error("bad diagnostic")
         }!!
-        assertEquals("stage", result["stage"])
-        assertEquals(IllegalStateException::class.java.name, result["diagnosticErrorType"])
+        assertEquals("unknown", result["stage"])
+        assertEquals("state", result["diagnosticErrorType"])
     }
 
     // Exercise the real result builder rather than duplicating its comparisons
@@ -81,11 +81,11 @@ class CalendarRejectionDiagnosticsTest {
         assertEquals(listOf("dateRange"), diagnostics["expectedMismatchesAtRead"])
         assertEquals("preflight", diagnostics["comparisonRead"])
         val storage = diagnostics["comparisonStorage"] as Map<*, *>
-        assertEquals("Europe/London", storage["startTimeZone"])
+        assertTrue((storage["startTimeZone"] as String).startsWith("[identifier:"))
         assertNull(storage["endTimeZone"])
         assertNull(storage["dtend"])
-        assertEquals("P3600S", storage["duration"])
-        assertEquals("FREQ=DAILY;COUNT=2", storage["rrule"])
+        assertTrue((storage["duration"] as String).startsWith("[identifier:"))
+        assertTrue((storage["rrule"] as String).startsWith("[recurrence:"))
     }
 
     @Test fun batchReReadDoesNotPretendToBeValuesAtTheFailedAssertion() {
@@ -96,7 +96,7 @@ class CalendarRejectionDiagnosticsTest {
         val diagnostics = result["diagnostics"] as Map<*, *>
         assertEquals(listOf("dateRange"), diagnostics["expectedMismatchesAtRead"])
         assertEquals("afterBatchFailure", diagnostics["comparisonRead"])
-        assertEquals(failure.message, diagnostics["batchExceptionMessage"])
+        assertFalse(diagnostics.containsKey("batchExceptionMessage"))
     }
 
     @Test fun releaseResultIsUnchangedApartFromOmittingDiagnostics() {

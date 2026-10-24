@@ -192,9 +192,11 @@ class Event {
     endLocationName = json['eventEndTimeZone'];
     var endLocation = timeZoneDatabase.locations[endLocationName];
     endLocation ??= startTimeZone;
+    // Native provider decoding may leave an unresolved end absent. Preserve
+    // that unknown value for validation; the current time is not event data.
     end = endTimestamp != null
         ? TZDateTime.fromMillisecondsSinceEpoch(endLocation, endTimestamp)
-        : TZDateTime.now(local);
+        : null;
     allDay = json['eventAllDay'] ?? false;
     if (Platform.isAndroid && (allDay ?? false)) {
       // On Android, the datetime in an allDay event is adjusted to local

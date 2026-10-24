@@ -125,7 +125,8 @@ class CalendarRangeReadThreadingTest {
         val reply = read()
         await(reply)
         assertEquals("500", reply.single().error)
-        assertTrue(reply.single().message.orEmpty().contains(at))
+        assertEquals("Calendar operation failed", reply.single().message)
+        assertFalse(reply.single().message.orEmpty().contains(at))
         assertAllWorkOffMainAndClosed()
     }
 
@@ -146,7 +147,8 @@ class CalendarRangeReadThreadingTest {
         val reply = read()
         await(reply)
         assertEquals("500", reply.single().error)
-        assertTrue(reply.single().message.orEmpty().contains("revoked"))
+        assertEquals("Calendar operation failed", reply.single().message)
+        assertFalse(reply.single().message.orEmpty().contains("revoked"))
         assertAllWorkOffMainAndClosed()
     }
     @Test fun emptyInstancesIsASuccessfulEmptyRange() {
@@ -205,7 +207,8 @@ class CalendarRangeReadThreadingTest {
         val reply = read(delegate = delegate)
         await(reply)
         assertEquals("500", reply.single().error)
-        assertTrue(reply.single().message.orEmpty().contains("serialize-failure"))
+        assertEquals("Calendar operation failed", reply.single().message)
+        assertFalse(reply.single().message.orEmpty().contains("serialize-failure"))
         assertAllWorkOffMainAndClosed()
     }
     @Test fun oneSerializationFailureCannotHideAnotherEvent() {
@@ -355,7 +358,8 @@ class CalendarRangeReadThreadingTest {
         provider.failAt = point
         val reply = direct(); await(reply)
         assertEquals("500", reply.single().error)
-        assertTrue(reply.single().message.orEmpty().contains(point))
+        assertEquals("Calendar operation failed", reply.single().message)
+        assertFalse(reply.single().message.orEmpty().contains(point))
         assertAllWorkOffMainAndClosed()
     }
     @Test fun directNullEventsIsNot404() = directNull("events")

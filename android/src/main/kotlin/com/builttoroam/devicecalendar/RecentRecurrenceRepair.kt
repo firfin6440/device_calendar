@@ -9,7 +9,7 @@ import android.os.SystemClock
 import android.provider.CalendarContract
 import android.provider.CalendarContract.Events
 import android.provider.Settings
-import android.util.Log
+import com.builttoroam.devicecalendar.diagnostics.*
 import org.json.JSONObject
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -18,7 +18,8 @@ import org.dmfs.rfc5545.recur.RecurrenceRule
 /** Narrow compare-and-set operation, never a split/reset/save implementation.
  * Full related-row coverage is read by native identity, not by loaded UI dates.
  * Every assertion and the recurrence update runs in one provider batch.
- * An existing prefix repeats its guarded DTSTART to invalidate Instances.
+ * An existing prefix repeats its guarded DTSTART to invalidate Instances and
+ * clears a guarded zero DTEND so LAST_DATE does not exclude the surviving root.
  */
 internal object RecentRecurrenceRepair {
     val columns = arrayOf(Events._ID, Events.CALENDAR_ID, Events.DTSTART,
@@ -91,7 +92,7 @@ internal object RecentRecurrenceRepair {
             })
             require(root[Events.RDATE] == null && root[Events.EXRULE] == null && root[Events.EXDATE] == null)
             val start = root[Events.DTSTART]?.toLongOrNull()
-            val storedEnd = root[Events.DTEND]?.toLongOrNull()
+            val storedEnd = root[Events.DTEND]?.toLongOrNull()?.takeUnless { it == 0L }
             val storedDuration = parseDurationMillis(root[Events.DURATION])
             require((storedEnd != null && root[Events.DURATION] == null) ||
                 (storedEnd == null && storedDuration != null &&
@@ -99,7 +100,7 @@ internal object RecentRecurrenceRepair {
             val end = when {
                 start == null -> null
                 storedEnd != null -> storedEnd
-                storedDuration != null -> Math.addExact(start, storedDuration)
+                storedDuration != null -> resolveStoredEventEndMillis(start, null, root[Events.DURATION])
                 else -> null
             }
             require(start != null && end != null && end > start &&
@@ -166,7 +167,9 @@ internal object RecentRecurrenceRepair {
                     else -> error("Unsupported recurrence value for $column")
                 }
             }
-        } else recurrencePrefixStorageChanges(rule, requireNotNull(root[Events.DTSTART]?.toLongOrNull()))
+        } else recurrencePrefixStorageChanges(rule,
+            requireNotNull(root[Events.DTSTART]?.toLongOrNull()),
+            root[Events.DTEND]?.toLong(), root[Events.DURATION])
         operations.add(ContentProviderOperation.newUpdate(Events.CONTENT_URI)
             .withSelection("${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND ${Events.DELETED} = 0",
                 arrayOf(target, calendar))
@@ -178,16 +181,11 @@ internal object RecentRecurrenceRepair {
             // actual native commit before a Dart/engine reply can be lost.
             // Never let a failed diagnostic turn a commit into a failed save.
             runCatching {
-                fun token(value: String) = value.take(120).replace(Regex("[^A-Za-z0-9_.:-]"), "?")
-                Log.i("KeepCalSyncRepair", "applied " + JSONObject(mapOf(
-                    "repairId" to token(repairId), "calendar" to token(calendar),
-                    "root" to token(target), "field" to "rrule",
-                    "operation" to when (kind) {
-                        "recurrence-creation" -> "restore-recurrence-creation"
-                        "recurrence-limit" -> "restore-recurrence-limit"
-                        else -> "restore-split-prefix"
-                    }
-                )).toString())
+                NativeDiagnostics.record(ProviderDiagnostic.recurrenceRepairApplied) { mapOf(DiagnosticField.repair to id(repairId), DiagnosticField.calendar to calendar(calendar), DiagnosticField.root to event(target), DiagnosticField.operation to state(when (kind) {
+                    "recurrence-creation" -> DiagnosticStep.recurrenceCreation
+                    "recurrence-limit" -> DiagnosticStep.recurrenceLimit
+                    else -> DiagnosticStep.splitPrefix
+                })) }
             }
             true
         } catch (failure: OperationApplicationException) {
@@ -203,9 +201,7 @@ internal object RecentRecurrenceRepair {
                              target: String, repairId: String, failure: Throwable) {
         if (!enabled) return
         runCatching {
-            Log.w("KeepCalSyncRepairDebug", "$outcome " + JSONObject(mapOf(
-                "repairId" to repairId, "calendar" to calendar, "root" to target
-            )).toString(), failure)
+            NativeDiagnostics.record(ProviderDiagnostic.recurrenceRepairFailed) { mapOf(DiagnosticField.outcome to step(outcome), DiagnosticField.repair to id(repairId), DiagnosticField.calendar to calendar(calendar), DiagnosticField.root to event(target), DiagnosticField.error to failure(failure)) }
         }
     }
 

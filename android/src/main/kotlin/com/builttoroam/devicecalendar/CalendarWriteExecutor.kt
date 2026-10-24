@@ -2,7 +2,7 @@ package com.builttoroam.devicecalendar
 
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import com.builttoroam.devicecalendar.diagnostics.*
 import com.builttoroam.devicecalendar.common.ErrorCodes
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
@@ -81,7 +81,7 @@ internal class CalendarWriteLane(private val executor: Executor) {
                 completion.deliver(result)
             } catch (failure: Throwable) {
                 // Engine/channel loss is not authority to replay SQL.
-                Log.e("CalendarWriteExecutor", "Write reply delivery failed", failure)
+                NativeDiagnostics.record(ProviderDiagnostic.replyFailed) { mapOf(DiagnosticField.error to failure(failure)) }
             } finally {
                 cleanup()
             }
@@ -97,14 +97,14 @@ internal class CalendarWriteResult : MethodChannel.Result {
         if (response == null) response = { it.success(result) }
     }
     override fun error(code: String, message: String?, details: Any?) {
-        if (response == null) response = { it.error(code, message, details) }
+        if (response == null) response = { it.error(code, "Calendar operation failed", null) }
     }
     override fun notImplemented() {
         if (response == null) response = { it.notImplemented() }
     }
     fun failed(failure: Throwable) {
         // A success recorded before failed cleanup is not a completed success.
-        response = { it.error(ErrorCodes.GENERIC_ERROR, failure.message, null) }
+        response = { it.error(ErrorCodes.GENERIC_ERROR, "Calendar write failed", null) }
     }
     fun deliver(result: MethodChannel.Result) {
         val reply = response

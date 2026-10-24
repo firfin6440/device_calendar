@@ -1,7 +1,7 @@
 package com.builttoroam.devicecalendar
 
 import android.content.Context
-import android.util.Log
+import com.builttoroam.devicecalendar.diagnostics.*
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
@@ -34,7 +34,7 @@ internal object CalendarSplitDebugOptions {
         context != null && current(context).enabled
     } catch (failure: Exception) {
         // A broken diagnostic preference must not break normal calendar saves.
-        Log.e(TAG, "Could not read split experiment; keeping DTSTART", failure)
+        NativeDiagnostics.record(ProviderDiagnostic.splitExperimentReadFailed) { mapOf(DiagnosticField.error to failure(failure)) }
         false
     }
 
@@ -54,7 +54,7 @@ internal object CalendarSplitDebugOptions {
                     "Could not persist the split experiment setting; read it again"
                 }
                 session = State(requested, persist)
-                Log.w(TAG, "split-dtstart-omission configured enabled=$requested persistAcrossRestarts=$persist")
+                NativeDiagnostics.record(ProviderDiagnostic.splitExperimentConfigured) { mapOf(DiagnosticField.enabled to flag(requested), DiagnosticField.persisted to flag(persist)) }
             }
             // Unlike the write-side safe fallback, the UI must learn of read
             // failures rather than falsely showing the experiment as disabled.

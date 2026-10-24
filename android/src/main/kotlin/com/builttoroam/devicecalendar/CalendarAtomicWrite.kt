@@ -3,7 +3,9 @@ package com.builttoroam.devicecalendar
 import android.database.sqlite.SQLiteException
 import com.builttoroam.devicecalendar.common.ErrorCodes
 
-internal class CalendarAtomicWriteRejected(cause: SQLiteException) : RuntimeException(cause.message, cause) {
+// The SQLite message/cause may contain SQL values. The type and code carry
+// rollback classification; never attach the original Throwable to this wrapper.
+internal class CalendarAtomicWriteRejected : RuntimeException("Atomic calendar write rejected") {
     val code: String = ErrorCodes.ATOMIC_WRITE_REJECTED
 }
 
@@ -16,5 +18,5 @@ internal class CalendarAtomicWriteRejected(cause: SQLiteException) : RuntimeExce
 internal fun <T> runAtomicCalendarWrite(write: () -> T): T = try {
     write()
 } catch (error: SQLiteException) {
-    throw CalendarAtomicWriteRejected(error)
+    throw CalendarAtomicWriteRejected()
 }

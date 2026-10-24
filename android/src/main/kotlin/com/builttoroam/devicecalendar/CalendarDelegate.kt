@@ -18,7 +18,7 @@ import android.provider.CalendarContract
 import android.provider.CalendarContract.CALLER_IS_SYNCADAPTER
 import android.provider.CalendarContract.Events
 import android.text.format.DateUtils
-import android.util.Log
+import com.builttoroam.devicecalendar.diagnostics.*
 import com.builttoroam.devicecalendar.common.ErrorMessages
 import com.builttoroam.devicecalendar.models.*
 import com.builttoroam.devicecalendar.models.Calendar
@@ -99,7 +99,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (!permissionGranted) {
                 finishWithError(
                     EC.NOT_AUTHORIZED,
-                    EM.NOT_AUTHORIZED_MESSAGE,
                     cachedValues.pendingChannelResult
                 )
                 return false
@@ -217,7 +216,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             } catch (e: Exception) {
                                 if (e is SecurityException) throw e
                                 complete = false
-                                Log.w("KeepCalRead", "Calendar metadata row quarantined", e)
+                                NativeDiagnostics.record(ProviderDiagnostic.metadataRowFailed) { mapOf(DiagnosticField.error to failure(e)) }
                             }
                         }
                     }
@@ -226,7 +225,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     // A broken cursor cannot be continued, but positive rows
                     // already read are still useful, never absence evidence.
                     complete = false
-                    Log.w("KeepCalRead", "Calendar metadata query incomplete", e)
+                    NativeDiagnostics.record(ProviderDiagnostic.metadataReadFailed) { mapOf(DiagnosticField.error to failure(e)) }
                 }
                 if (!complete && calendars.isEmpty()) {
                     throw IllegalStateException("No usable calendar metadata")
@@ -235,7 +234,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     mapOf("complete" to false, "calendars" to calendars)
                 finishWithSuccess(_gson?.toJson(payload), pendingChannelResult)
             } catch (e: Exception) {
-                finishWithError(EC.GENERIC_ERROR, e.message, pendingChannelResult)
+                finishWithError(EC.GENERIC_ERROR, pendingChannelResult)
             }
         } else {
             val parameters = CalendarMethodsParametersCacheModel(
@@ -257,7 +256,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 if (!isInternalCall) {
                     finishWithError(
                         EC.INVALID_ARGUMENT,
-                        EM.CALENDAR_ID_INVALID_ARGUMENT_NOT_A_NUMBER_MESSAGE,
                         pendingChannelResult
                     )
                 }
@@ -297,13 +295,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     if (!isInternalCall) {
                         finishWithError(
                             EC.NOT_FOUND,
-                            "The calendar with the ID $calendarId could not be found",
                             pendingChannelResult
                         )
                     }
                 }
             } catch (e: Exception) {
-                finishWithError(EC.GENERIC_ERROR, e.message, pendingChannelResult)
+                finishWithError(EC.GENERIC_ERROR, pendingChannelResult)
             } finally {
                 cursor?.close()
             }
@@ -336,7 +333,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 if (!isInternalCall) {
                     finishWithError(
                         EC.INVALID_ARGUMENT,
-                        EM.CALENDAR_ID_INVALID_ARGUMENT_NOT_A_NUMBER_MESSAGE,
                         pendingChannelResult
                     )
                 }
@@ -357,7 +353,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 if (!isInternalCall) {
                     finishWithError(
                         EC.NOT_FOUND,
-                        "The calendar with the ID $calendarId could not be found",
                         pendingChannelResult
                     )
                 }
@@ -435,7 +430,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (startDate == null && endDate == null && eventIds.isEmpty()) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                ErrorMessages.RETRIEVE_EVENTS_ARGUMENTS_NOT_VALID_MESSAGE,
                 pendingChannelResult
             )
             return
@@ -448,7 +442,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             val gson = _gson
             val exceptionHandler = CoroutineExceptionHandler { _, exception ->
                 uiThreadHandler.post {
-                    finishWithError(EC.GENERIC_ERROR, exception.message, pendingChannelResult)
+                    finishWithError(EC.GENERIC_ERROR, pendingChannelResult)
                 }
             }
 
@@ -462,8 +456,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 val calendar = readCalendarForEventRange(calendarId, contentResolver)
                 if (calendar == null) {
                     uiThreadHandler.post {
-                        finishWithError(EC.NOT_FOUND,
-                            "Couldn't retrieve the Calendar with ID $calendarId", pendingChannelResult)
+                        finishWithError(EC.NOT_FOUND, pendingChannelResult)
                     }
                     return@launch
                 }
@@ -650,7 +643,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (eventIdNumber == null) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "The event ID must be a number",
                 pendingChannelResult
             )
             return
@@ -661,7 +653,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val eventUri = ContentUris.withAppendedId(Events.CONTENT_URI, eventIdNumber)
         val exceptionHandler = CoroutineExceptionHandler { _, exception ->
             uiThreadHandler.post {
-                finishWithError(EC.GENERIC_ERROR, exception.message, pendingChannelResult)
+                finishWithError(EC.GENERIC_ERROR, pendingChannelResult)
             }
         }
         // A direct Events read is not equivalent to an expanded Instances
@@ -679,7 +671,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (event == null || event.calendarId != calendarId) {
                 uiThreadHandler.post {
                     finishWithError(EC.NOT_FOUND,
-                        "The event with the ID $eventId could not be found in calendar $calendarId",
                         pendingChannelResult)
                 }
                 return@launch
@@ -688,8 +679,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             val calendar = readCalendarForEventRange(calendarId, contentResolver)
             if (calendar == null) {
                 uiThreadHandler.post {
-                    finishWithError(EC.NOT_FOUND,
-                        "Couldn't retrieve the Calendar with ID $calendarId", pendingChannelResult)
+                    finishWithError(EC.NOT_FOUND, pendingChannelResult)
                 }
                 return@launch
             }
@@ -754,7 +744,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         ) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid calendar, event, or attendee status",
                 pendingChannelResult
             )
             return
@@ -771,7 +760,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 selectedOccurrenceWasDetached == null) {
                 finishWithError(
                     EC.INVALID_ARGUMENT,
-                    "Invalid recurrence change target",
                     pendingChannelResult
                 )
                 return
@@ -780,7 +768,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (masterEventId.isNullOrEmpty()) {
                 finishWithError(
                     EC.INVALID_ARGUMENT,
-                    "A recurring master event ID is required",
                     pendingChannelResult
                 )
                 return
@@ -837,7 +824,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 else -> {
                     finishWithError(
                         EC.INVALID_ARGUMENT,
-                        "Unknown recurrence change scope: $scope",
                         pendingChannelResult
                     )
                     return
@@ -879,7 +865,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (resolver == null || masterId == null || calendarIdNumber == null) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid calendar or recurring master event",
                 pendingChannelResult
             )
             return
@@ -893,7 +878,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (currentMasterStatus == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The attendee ${change.email} could not be found for event $masterEventId",
                 pendingChannelResult
             )
             return
@@ -954,7 +938,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (!foundMasterAttendee) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The attendee ${change.email} could not be found for event $masterEventId",
                 pendingChannelResult
             )
             return
@@ -972,7 +955,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (updatedRows <= 0) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                "The recurring RSVP assignment updated no attendee rows",
                 pendingChannelResult
             )
             return
@@ -997,7 +979,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val eventIdNumber = eventId.toLongOrNull()
         val calendarIdNumber = calendarId.toLongOrNull()
         if (eventIdNumber == null || calendarIdNumber == null) {
-            finishWithError(EC.INVALID_ARGUMENT, "Invalid calendar or event", pendingChannelResult)
+            finishWithError(EC.INVALID_ARGUMENT, pendingChannelResult)
             return
         }
         val contentResolver = _context?.contentResolver
@@ -1016,7 +998,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (!eventExists) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The event with the ID $eventId could not be found in calendar $calendarId",
                 pendingChannelResult
             )
             return
@@ -1062,7 +1043,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (currentStatus == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The attendee ${change.email} could not be found for event $eventId",
                 pendingChannelResult
             )
             return
@@ -1148,7 +1128,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 selectedOccurrenceWasDetached == null) {
                 finishWithError(
                     EC.INVALID_ARGUMENT,
-                    "Invalid recurrence change target",
                     pendingChannelResult
                 )
                 return
@@ -1158,7 +1137,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (masterEventId.isNullOrEmpty()) {
                 finishWithError(
                     EC.INVALID_ARGUMENT,
-                    "A recurring master event ID is required",
                     pendingChannelResult
                 )
                 return
@@ -1232,7 +1210,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 else -> {
                     finishWithError(
                         EC.INVALID_ARGUMENT,
-                        "Unknown recurrence change scope: $scope",
                         pendingChannelResult
                     )
                     return
@@ -1269,7 +1246,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             currentMaster.recurrenceRule == null || masterRange == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The recurring master event $masterEventId could not be found",
                 pendingChannelResult
             )
             return
@@ -1293,9 +1269,19 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (attendeesChange != null && requestedAttendees == null) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid attendee changes",
                 pendingChannelResult
             )
+            return
+        }
+        val needsSelectedTiming = selectedOccurrenceWasDetached &&
+            (dateRangeChange != null || shouldReplaceRecurringSeries(recurrenceChange != null,
+                currentMaster.recurrenceRule, requestedRecurrence?.rawRule))
+        val selectedTimingSource = if (needsSelectedTiming) {
+            queryStoredEventChangeValues(_context?.contentResolver, calendarId, selectedEventId)
+        } else null
+        if (needsSelectedTiming &&
+            (selectedTimingSource == null || selectedTimingSource.deleted || selectedTimingSource.dateRange == null)) {
+            finishWithError(EC.NOT_FOUND, pendingChannelResult)
             return
         }
         if (dateRangeChange == null) {
@@ -1305,15 +1291,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     requestedRecurrence?.rawRule
                 )
             ) {
-                val selectedRange = if (selectedOccurrenceWasDetached) {
-                    queryStoredEventChangeValues(
-                        _context?.contentResolver,
-                        calendarId,
-                        selectedEventId
-                    )?.dateRange
-                } else {
-                    null
-                }
                 replaceRecurringSeriesWithStandalone(
                     calendarId,
                     masterEventId,
@@ -1322,9 +1299,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     standaloneReplacementRange(
                         masterRange,
                         originalOccurrenceStart,
-                        selectedRange
+                        selectedTimingSource?.dateRange
                     ),
-                    pendingChannelResult
+                    pendingChannelResult,
+                    selectedTimingSource?.let { selectedEventId to it }
                 )
             } else {
                 val removedExceptionOperations = when (recurrenceExceptionCleanup(
@@ -1343,11 +1321,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     RecurrenceExceptionCleanup.NONE -> emptyList()
                 }
                 if (debugLoggingEnabled && isTestRecTitle(currentMaster.title)) {
-                    Log.i(
-                        TEST_REC_TRACE_TAG,
-                        "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN recurrence-prune\" " +
-                            "source=device_calendar count=${removedExceptionOperations.size}"
-                    )
+                    NativeDiagnostics.record(ProviderDiagnostic.recurrencePruned) { mapOf(DiagnosticField.count to count(removedExceptionOperations.size)) }
                 }
                 applyEventChangesToEvent(
                     calendarId,
@@ -1366,11 +1340,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val requestedOccurrence = parseEventDateRangeValue(dateRangeChange["requested"])
         val occurrenceDuration = masterRange.endDate - masterRange.startDate
         val currentOccurrence = if (selectedOccurrenceWasDetached) {
-            queryStoredEventChangeValues(
-                _context?.contentResolver,
-                calendarId,
-                selectedEventId
-            )?.dateRange
+            selectedTimingSource?.dateRange
         } else {
             EventDateRangeValue(
                 startDate = originalOccurrenceStart,
@@ -1439,16 +1409,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             requestedOccurrence
         )
         if (debugLoggingEnabled && isTestRecTitle(currentMaster.title)) {
-            Log.i(
-                TEST_REC_TRACE_TAG,
-                "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN scope=entireSeries\" " +
-                    "source=device_calendar expected=" +
-                    "${expectedOccurrence.startDate}..${expectedOccurrence.endDate} " +
-                    "requested=${requestedOccurrence.startDate}..${requestedOccurrence.endDate} " +
-                    "translated=${translatedRequested.startDate}..${translatedRequested.endDate} " +
-                    "storage=DTSTART+DURATION+RRULE " +
-                    "duration=${durationForDateRange(translatedRequested)}"
-            )
+            NativeDiagnostics.record(ProviderDiagnostic.seriesMoved) { mapOf(DiagnosticField.expectedStart to instant(expectedOccurrence.startDate), DiagnosticField.expectedEnd to instant(expectedOccurrence.endDate),
+ DiagnosticField.requestedStart to instant(requestedOccurrence.startDate), DiagnosticField.requestedEnd to instant(requestedOccurrence.endDate),
+ DiagnosticField.start to instant(translatedRequested.startDate), DiagnosticField.end to instant(translatedRequested.endDate)) }
         }
         val translatedChanges = eventChanges.toMutableMap().apply {
             put(
@@ -1475,7 +1438,8 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                     originalOccurrenceStart,
                     requestedOccurrence
                 ),
-                pendingChannelResult
+                pendingChannelResult,
+                selectedTimingSource?.let { selectedEventId to it }
             )
         } else {
             applyEventChangesToEvent(
@@ -1582,8 +1546,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         // Date/definition read above must belong to the same source generation
         // as the recurrence mapping, even if only a colour/title was requested.
         val storedStart = template.getAsLong(Events.DTSTART)
-        val storedEnd = template.getAsLong(Events.DTEND) ?:
-            parseDurationMillis(template.getAsString(Events.DURATION))?.let { storedStart + it }
+        val storedEnd = storedStart?.let {
+            resolveStoredEventEndMillis(it, template.getAsLong(Events.DTEND),
+                template.getAsString(Events.DURATION))
+        }
         val storedZone = template.getAsString(Events.EVENT_TIMEZONE) ?: TimeZone.getDefault().id
         if (storedStart != originalRange.startDate || storedEnd != originalRange.endDate ||
             storedZone != originalRange.startTimeZone ||
@@ -1735,12 +1701,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             }
         }
         if (debugLoggingEnabled && isTestRecTitle(template.getAsString(Events.TITLE))) {
-            Log.i(TEST_REC_TRACE_TAG, "TEST_REC_STATE trigger=\"SAVE-WRITE-PLAN exception-reset-in-place\" " +
-                "source=device_calendar updated=${selectedResetIds.size} " +
-                "cancelledSourceSlots=$cancelledSlots cancelledDestinationSlots=${cancellations.keys} " +
-                "newCancellationSlots=${missingCancellations.keys} " +
-                "restored=${identities.count { it.isDeleted && it.eventId in selectedResetIds }} " +
-                "removedSlots=${identities.zip(resets).count { !it.first.isDeleted && it.second.range == null }}")
+            NativeDiagnostics.record(ProviderDiagnostic.exceptionsReset) { mapOf(DiagnosticField.count to count(selectedResetIds.size), DiagnosticField.sourceCount to count(cancelledSlots.size),
+ DiagnosticField.destinationCount to count(cancellations.size), DiagnosticField.insertedCount to count(missingCancellations.size),
+ DiagnosticField.restoredCount to count(identities.count { it.isDeleted && it.eventId in selectedResetIds }),
+ DiagnosticField.removedCount to count(identities.zip(resets).count { !it.first.isDeleted && it.second.range == null })) }
         }
         return operations
     }
@@ -1858,17 +1822,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val deleted: Boolean
     ) {
         val durationMillis: Long?
-            get() = when {
-                start != null && end != null -> end - start
-                else -> parseDurationMillis(duration)
-            }
+            get() = if (start != null) resolvedEnd?.let { it - start } else parseDurationMillis(duration)
 
         val resolvedEnd: Long?
-            get() = end ?: if (start != null) {
-                durationMillis?.let(start::plus)
-            } else {
-                null
-            }
+            get() = start?.let { resolveStoredEventEndMillis(it, end, duration) }
     }
 
     private fun isTestRecTitle(title: String?): Boolean =
@@ -1881,6 +1838,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
     ) {
         if (!debugLoggingEnabled) return
 
+        try {
         val contentResolver = _context?.contentResolver ?: return
         val masters = mutableListOf<TestRecProviderRow>()
         val masterSelection = buildString {
@@ -1905,56 +1863,19 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 compareBy<TestRecProviderRow> { it.originalInstanceTime ?: Long.MIN_VALUE }
                     .thenBy(TestRecProviderRow::id)
             )
-            Log.i(
-                TEST_REC_TRACE_TAG,
-                "TEST_REC_STATE trigger=\"$trigger\" source=provider MASTER " +
-                    "calendar=$calendarId id=${master.id} recurrence=${master.recurrenceRule ?: "none"} " +
-                    "start=${traceTestRecInstant(master.start)} " +
-                    "end=${traceTestRecInstant(master.resolvedEnd)} " +
-                    "durationRaw=${master.duration ?: "null"} " +
-                    "durationMs=${master.durationMillis ?: "null"} " +
-                    "timeZones=${master.startTimeZone ?: "null"}->${master.endTimeZone ?: "null"} " +
-                    "color=${master.color ?: "default"}/${master.colorKey ?: "default"} " +
-                    "dirty=${master.dirty} deleted=${master.deleted} " +
-                    "exceptions=${exceptions.size}"
-            )
+            NativeDiagnostics.record(ProviderDiagnostic.masterSnapshot) { mapOf(DiagnosticField.calendar to calendar(calendarId), DiagnosticField.root to event(master.id),
+ DiagnosticField.recurrence to recurrence(master.recurrenceRule), DiagnosticField.start to instant(master.start),
+ DiagnosticField.end to instant(master.resolvedEnd), DiagnosticField.dirty to flag(master.dirty), DiagnosticField.deleted to flag(master.deleted), DiagnosticField.count to count(exceptions.size)) }
             exceptions.forEachIndexed { index, exception ->
-                val expectedStart = exception.originalInstanceTime
-                val actualDuration = exception.durationMillis
-                val diffs = mutableListOf<String>()
-                if (expectedStart != null && exception.start != expectedStart) {
-                    diffs.add("startDeltaMs=${exception.start?.minus(expectedStart)}")
-                }
-                if (actualDuration != master.durationMillis) {
-                    diffs.add(
-                        "duration=${master.durationMillis ?: "null"}->${actualDuration ?: "null"}"
-                    )
-                }
-                if (exception.title != master.title) {
-                    diffs.add("titleChanged=true")
-                }
-                if (exception.location != master.location) {
-                    diffs.add("locationChanged=true")
-                }
-                if (exception.color != master.color || exception.colorKey != master.colorKey) {
-                    diffs.add(
-                        "color=${master.color}/${master.colorKey}->" +
-                            "${exception.color}/${exception.colorKey}"
-                    )
-                }
-                Log.i(
-                    TEST_REC_TRACE_TAG,
-                    "TEST_REC_STATE trigger=\"$trigger\" source=provider EXCEPTION " +
-                        "index=${index + 1}/${exceptions.size} id=${exception.id} master=${master.id} " +
-                        "slot=${traceTestRecInstant(exception.originalInstanceTime)} " +
-                        "start=${traceTestRecInstant(exception.start)} " +
-                        "end=${traceTestRecInstant(exception.resolvedEnd)} " +
-                        "durationRaw=${exception.duration ?: "null"} " +
-                        "status=${exception.status ?: "null"} dirty=${exception.dirty} " +
-                        "deleted=${exception.deleted} diffs=${if (diffs.isEmpty()) "none" else diffs.joinToString(";")}"
-                )
+                NativeDiagnostics.record(ProviderDiagnostic.exceptionSnapshot) { mapOf(DiagnosticField.id to event(exception.id), DiagnosticField.root to event(master.id), DiagnosticField.index to count(index),
+ DiagnosticField.slot to instant(exception.originalInstanceTime), DiagnosticField.start to instant(exception.start), DiagnosticField.end to instant(exception.resolvedEnd),
+ DiagnosticField.dirty to flag(exception.dirty), DiagnosticField.deleted to flag(exception.deleted),
+ DiagnosticField.titleChanged to flag(exception.title != master.title), DiagnosticField.locationChanged to flag(exception.location != master.location),
+ DiagnosticField.timeChanged to flag(exception.start != exception.originalInstanceTime), DiagnosticField.durationChanged to flag(exception.durationMillis != master.durationMillis),
+ DiagnosticField.colorChanged to flag(exception.color != master.color || exception.colorKey != master.colorKey)) }
             }
         }
+        } catch (_: Throwable) { /* Debug queries must not affect event operations. */ }
     }
 
     private fun queryTestRecProviderRows(
@@ -2012,7 +1933,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 }
             }
         } catch (error: Exception) {
-            Log.e(TEST_REC_TRACE_TAG, "TEST_REC_STATE provider snapshot failed: $error")
+            NativeDiagnostics.record(ProviderDiagnostic.snapshotFailed) { mapOf(DiagnosticField.error to failure(error)) }
         }
         return rows
     }
@@ -2067,14 +1988,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         currentMaster: StoredEventChangeValues,
         eventChanges: Map<String, Any?>,
         replacementRange: EventDateRangeValue,
-        pendingChannelResult: MethodChannel.Result
+        pendingChannelResult: MethodChannel.Result,
+        selectedTimingSource: Pair<String, StoredEventChangeValues>? = null
     ) {
         val resolver = _context?.contentResolver
         val masterId = masterEventId.toLongOrNull()
         if (resolver == null || masterId == null) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                "The Calendar Provider is unavailable",
                 pendingChannelResult
             )
             return
@@ -2128,7 +2049,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         ) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid recurring series replacement",
                 pendingChannelResult
             )
             return
@@ -2182,7 +2102,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (replacement == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The recurring master event $masterEventId could not be loaded",
                 pendingChannelResult
             )
             return
@@ -2231,13 +2150,23 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
 
         val operations = ArrayList<ContentProviderOperation>()
-        val recurrenceGuard = RecurrenceRuleStorageGuard.selection(currentMaster.recurrenceRule)
+        selectedTimingSource?.let { (id, source) ->
+            val parts = mutableListOf("${Events._ID} = ?", "${Events.CALENDAR_ID} = ?", "${Events.DELETED} != 1")
+            val args = mutableListOf(id, calendarId)
+            addStoredTimingSelection(parts, args, source)
+            RecurrenceRuleStorageGuard.append(parts, args, source.recurrenceRule)
+            operations.add(ContentProviderOperation.newAssertQuery(Events.CONTENT_URI)
+                .withSelection(parts.joinToString(" AND "), args.toTypedArray())
+                .withExpectedCount(1).build())
+        }
+        val replacementParts = mutableListOf("${Events._ID} = ?", "${Events.CALENDAR_ID} = ?", "${Events.DELETED} != 1")
+        val replacementArgs = mutableListOf(masterEventId, calendarId)
+        RecurrenceRuleStorageGuard.append(replacementParts, replacementArgs, currentMaster.recurrenceRule)
+        addStoredTimingSelection(replacementParts, replacementArgs, currentMaster)
         operations.add(
             ContentProviderOperation.newDelete(Events.CONTENT_URI)
                 .withSelection(
-                    "${Events._ID} = ? AND ${Events.CALENDAR_ID} = ? AND " +
-                        "${recurrenceGuard.sql} AND ${Events.DELETED} != 1",
-                    (listOf(masterEventId, calendarId) + recurrenceGuard.args).toTypedArray()
+                    replacementParts.joinToString(" AND "), replacementArgs.toTypedArray()
                 )
                 .withExpectedCount(1)
                 .build()
@@ -2326,7 +2255,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         } catch (exception: Exception) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                exception.message ?: "The standalone replacement could not be created",
                 pendingChannelResult
             )
             return
@@ -2337,7 +2265,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (newId == null) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                "The standalone replacement could not be created",
                 pendingChannelResult
             )
             return
@@ -2384,7 +2311,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             masterRange == null || rawRule == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The recurring master event $masterEventId could not be found",
                 pendingChannelResult
             )
             return
@@ -2426,7 +2352,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (selectedValues == null || selectedValues.deleted || selectedRange == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The selected recurring occurrence could not be found",
                 pendingChannelResult
             )
             return
@@ -2438,8 +2363,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (attendeeStatusChange != null && currentAttendeeStatus == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The attendee ${attendeeStatusChange.email} could not be found for event " +
-                    attendeeSourceEventId,
                 pendingChannelResult
             )
             return
@@ -2483,7 +2406,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             (expectedReminders == null || requestedReminders == null)) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid reminder changes",
                 pendingChannelResult
             )
             return
@@ -2492,7 +2414,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             (expectedResources == null || requestedResources == null)) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid resource changes",
                 pendingChannelResult
             )
             return
@@ -2501,7 +2422,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             (expectedAttendees == null || requestedAttendees == null)) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid attendee changes",
                 pendingChannelResult
             )
             return
@@ -2510,7 +2430,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             (expectedRecurrence == null || requestedRecurrence == null)) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid recurrence changes",
                 pendingChannelResult
             )
             return
@@ -2585,7 +2504,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val originalRule = try {
             Rrule(rawRule)
         } catch (_: InvalidRecurrenceRuleException) {
-            finishWithError(EC.INVALID_ARGUMENT, "Invalid recurring event rule", pendingChannelResult)
+            finishWithError(EC.INVALID_ARGUMENT, pendingChannelResult)
             return
         }
         val oldRule = Rrule(rawRule)
@@ -2623,7 +2542,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (occurrencesBefore <= 0 || previousOccurrenceStart == null) {
             finishWithError(
                 EC.NOT_ALLOWED,
-                "The first occurrence cannot be split from an empty earlier series",
                 pendingChannelResult
             )
             return
@@ -2642,7 +2560,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             queryMasterEvent(resolver, calendarId, it)
         }
         if (futureEvent == null) {
-            finishWithError(EC.NOT_FOUND, "The recurring master event could not be loaded", pendingChannelResult)
+            finishWithError(EC.NOT_FOUND, pendingChannelResult)
             return
         }
         val calendar = retrieveCalendar(calendarId, pendingChannelResult, true)
@@ -2679,8 +2597,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (!attendeeFound) {
                 finishWithError(
                     EC.NOT_FOUND,
-                    "The attendee ${attendeeStatusChange.email} could not be found for event " +
-                        attendeeSourceEventId,
                     pendingChannelResult
                 )
                 return
@@ -2729,7 +2645,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (resolver == null) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                "The Calendar Provider is unavailable",
                 pendingChannelResult
             )
             return
@@ -2859,7 +2774,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 if (latestStatus == null) {
                     finishWithError(
                         EC.NOT_FOUND,
-                        "The attendee ${attendeeStatusChange.email} could not be found",
                         pendingChannelResult
                     )
                 } else {
@@ -2872,11 +2786,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             },
                             latestStatus,
                             attendeeSourceEventId,
-                            diagnostics = mapOf(
-                                "stage" to "thisAndFollowing.atomicBatch",
-                                "batchExceptionType" to exception.javaClass.name,
-                                "batchExceptionMessage" to exception.message
-                            )
+                            diagnostics = calendarFailureDiagnostics("thisAndFollowing.atomicBatch", exception)
                         ),
                         pendingChannelResult
                     )
@@ -2917,7 +2827,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         } catch (exception: Exception) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                exception.message ?: "The future recurring series could not be created",
                 pendingChannelResult
             )
             return
@@ -2926,7 +2835,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (newId == null) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                "The future recurring series could not be created",
                 pendingChannelResult
             )
             return
@@ -3101,7 +3009,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         ) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid calendar, event, or event changes",
                 pendingChannelResult
             )
             return
@@ -3124,7 +3031,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (currentValues == null || currentValues.deleted) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The event with the ID $eventId could not be found in calendar $calendarId",
                 pendingChannelResult
             )
             return
@@ -3180,7 +3086,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             durationForDateRange(requestedDateRange!!) == null) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Recurring event ranges must use whole-second durations",
                 pendingChannelResult
             )
             return
@@ -3191,7 +3096,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 durationForDateRange(currentValues.dateRange!!) == null)) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Recurring event ranges must use whole-second durations",
                 pendingChannelResult
             )
             return
@@ -3233,47 +3137,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 expectedLocation
             )
         }
-        if (dateRangeChange != null) {
-            addNullableSelection(
-                selectionParts,
-                selectionArgs,
-                Events.DTSTART,
-                currentValues.rawStartDate
-            )
-            addNullableSelection(
-                selectionParts,
-                selectionArgs,
-                Events.EVENT_TIMEZONE,
-                currentValues.rawStartTimeZone
-            )
-            addNullableSelection(
-                selectionParts,
-                selectionArgs,
-                Events.DTEND,
-                currentValues.rawEndDate
-            )
-            addNullableSelection(
-                selectionParts,
-                selectionArgs,
-                Events.EVENT_END_TIMEZONE,
-                currentValues.rawEndTimeZone
-            )
-            addNullableSelection(
-                selectionParts,
-                selectionArgs,
-                Events.DURATION,
-                currentValues.duration
-            )
-            addNullableSelection(
-                selectionParts,
-                selectionArgs,
-                Events.RRULE,
-                currentValues.recurrenceRule
-            )
-            selectionParts.add("${Events.ALL_DAY} = ?")
-            selectionArgs.add(if (currentValues.allDay) "1" else "0")
-        }
-        if (recurrenceChange != null && dateRangeChange == null) {
+        // A recurrence-only rewrite copies timing too. Its safety must not
+        // depend on the exception policy adding an incidental template guard.
+        if (dateRangeChange != null || recurrenceChange != null) {
+            addStoredTimingSelection(selectionParts, selectionArgs, currentValues)
             addNullableSelection(
                 selectionParts,
                 selectionArgs,
@@ -3349,7 +3216,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (contentResolver == null) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                "The Calendar Provider is unavailable",
                 pendingChannelResult
             )
             return
@@ -3573,11 +3439,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             )
             return
         } catch (exception: RecurrenceCancellationNotReady) {
-            finishWithError("425", "Cancellation migration is waiting for master sync identity", pendingChannelResult)
+            finishWithError("425", pendingChannelResult)
             return
         } catch (exception: CalendarAtomicWriteRejected) {
-            finishWithError(exception.code,
-                exception.message ?: "The atomic calendar write was rejected", pendingChannelResult)
+            finishWithError(exception.code, pendingChannelResult)
             return
         } catch (exception: android.content.OperationApplicationException) {
             // One of the optimistic assertions failed. Re-read every field so
@@ -3586,7 +3451,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         } catch (exception: Exception) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                exception.message ?: "The event changes could not be applied",
                 pendingChannelResult
             )
             return
@@ -3596,7 +3460,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (latestValues == null || latestValues.deleted) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The event with the ID $eventId could not be found in calendar $calendarId",
                 pendingChannelResult
             )
             return
@@ -3641,7 +3504,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (eventChanges["recurrence"] != null) {
             finishWithError(
                 EC.NOT_ALLOWED,
-                "A recurrence rule cannot be changed for only one occurrence",
                 pendingChannelResult
             )
             return
@@ -3658,14 +3520,13 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             currentMaster.recurrenceRule == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The recurring master event $masterEventId could not be found",
                 pendingChannelResult
             )
             return
         }
         val exceptionSyncId = if (requireExceptionSyncIdentity) queryMasterSyncId(contentResolver, masterId) else null
         if (requireExceptionSyncIdentity && (exceptionSyncId.isNullOrBlank() || exceptionSyncId.startsWith("SYNC_ERROR:"))) {
-            finishWithError("425", "Exception creation is waiting for master sync identity", pendingChannelResult)
+            finishWithError("425", pendingChannelResult)
             return
         }
         val currentAttendeeStatus = attendeeStatusChange?.let {
@@ -3674,8 +3535,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (attendeeStatusChange != null && currentAttendeeStatus == null) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The attendee ${attendeeStatusChange.email} could not be found for event " +
-                    masterEventId,
                 pendingChannelResult
             )
             return
@@ -3702,7 +3561,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             (expectedReminders == null || requestedReminders == null)) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid reminder changes",
                 pendingChannelResult
             )
             return
@@ -3711,7 +3569,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             (expectedResources == null || requestedResources == null)) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid resource changes",
                 pendingChannelResult
             )
             return
@@ -3720,7 +3577,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             (expectedAttendees == null || requestedAttendees == null)) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "Invalid attendee changes",
                 pendingChannelResult
             )
             return
@@ -3818,7 +3674,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (finalRange == null) {
             finishWithError(
                 EC.INVALID_ARGUMENT,
-                "The recurring occurrence has no valid date range",
                 pendingChannelResult
             )
             return
@@ -3866,7 +3721,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (contentResolver == null) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                "The Calendar Provider is unavailable",
                 pendingChannelResult
             )
             return
@@ -3900,8 +3754,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             }) {
             finishWithError(
                 EC.NOT_FOUND,
-                "The attendee ${attendeeStatusChange.email} could not be found for event " +
-                    masterEventId,
                 pendingChannelResult
             )
             return
@@ -3956,28 +3808,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 expectedLocation
             )
         }
-        if (dateRangeChange != null) {
-            addNullableSelection(
-                masterSelectionParts,
-                masterSelectionArgs,
-                Events.DTSTART,
-                currentMaster.rawStartDate
-            )
-            addNullableSelection(
-                masterSelectionParts,
-                masterSelectionArgs,
-                Events.EVENT_TIMEZONE,
-                currentMaster.rawStartTimeZone
-            )
-            addNullableSelection(
-                masterSelectionParts,
-                masterSelectionArgs,
-                Events.DURATION,
-                currentMaster.duration
-            )
-            masterSelectionParts.add("${Events.ALL_DAY} = ?")
-            masterSelectionArgs.add(if (currentMaster.allDay) "1" else "0")
-        }
+        // Even a title/RSVP-only edit materializes a complete exception range.
+        // Guard the inherited source, not only fields explicitly edited by UI.
+        addStoredTimingSelection(masterSelectionParts, masterSelectionArgs, currentMaster)
         operations.add(
             ContentProviderOperation.newAssertQuery(Events.CONTENT_URI)
                 .withSelection(
@@ -4208,7 +4041,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         } catch (exception: android.content.OperationApplicationException) {
             if (requireExceptionSyncIdentity && queryMasterSyncId(contentResolver, masterId) != exceptionSyncId) {
                 // The assertion and insert share a transaction: no write committed.
-                finishWithError("425", "Master sync identity changed before exception creation", pendingChannelResult)
+                finishWithError("425", pendingChannelResult)
                 return
             }
             if (attendeeStatusChange != null) {
@@ -4220,7 +4053,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 if (latestStatus == null) {
                     finishWithError(
                         EC.NOT_FOUND,
-                        "The attendee ${attendeeStatusChange.email} could not be found",
                         pendingChannelResult
                     )
                 } else {
@@ -4233,11 +4065,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             },
                             latestStatus,
                             masterEventId,
-                            diagnostics = mapOf(
-                                "stage" to "occurrence.atomicBatch",
-                                "batchExceptionType" to exception.javaClass.name,
-                                "batchExceptionMessage" to exception.message
-                            )
+                            diagnostics = calendarFailureDiagnostics("occurrence.atomicBatch", exception)
                         ),
                         pendingChannelResult
                     )
@@ -4295,7 +4123,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         } catch (exception: Exception) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                exception.message ?: "The recurring occurrence could not be updated",
                 pendingChannelResult
             )
             return
@@ -4330,7 +4157,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         if (insertedEventId == null) {
             finishWithError(
                 EC.GENERIC_ERROR,
-                "The recurring occurrence could not be updated",
                 pendingChannelResult
             )
             return
@@ -4416,8 +4242,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val dateRange: EventDateRangeValue?
             get() {
                 val start = rawStartDate ?: return null
-                val end = rawEndDate ?: parseDurationMillis(duration)?.let(start::plus)
-                    ?: return null
+                // Resolve semantics without changing rawEndDate: SQL guards
+                // must distinguish an observed zero from an observed NULL.
+                val end = resolveStoredEventEndMillis(start, rawEndDate, duration) ?: return null
                 val startZone = rawStartTimeZone ?: TimeZone.getDefault().id
                 return EventDateRangeValue(
                     startDate = start,
@@ -4500,6 +4327,21 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         }
     }
 
+    /** Shared CAS invariant for any write that copies or derives timing. Raw
+     * zero and NULL are distinct here even though reads resolve them alike. */
+    private fun addStoredTimingSelection(
+        parts: MutableList<String>, args: MutableList<String>, current: StoredEventChangeValues
+    ) {
+        mapOf(
+            Events.DTSTART to current.rawStartDate,
+            Events.DTEND to current.rawEndDate,
+            Events.DURATION to current.duration,
+            Events.EVENT_TIMEZONE to current.rawStartTimeZone,
+            Events.EVENT_END_TIMEZONE to current.rawEndTimeZone,
+            Events.ALL_DAY to if (current.allDay) 1 else 0
+        ).forEach { (column, value) -> addNullableSelection(parts, args, column, value) }
+    }
+
     private fun guardedRecurrencePrefixUpdate(
         calendarId: String,
         eventId: String,
@@ -4513,18 +4355,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         // The split ordinal and successor timing were calculated from these
         // values. In particular, repeating DTSTART must not undo an external
         // move that arrived after the read but before applyBatch.
-        mapOf(
-            Events.DTSTART to current.rawStartDate,
-            Events.DTEND to current.rawEndDate,
-            Events.DURATION to current.duration,
-            Events.EVENT_TIMEZONE to current.rawStartTimeZone,
-            Events.EVENT_END_TIMEZONE to current.rawEndTimeZone,
-            Events.ALL_DAY to if (current.allDay) 1 else 0
-        ).forEach { (column, value) -> addNullableSelection(parts, args, column, value) }
-        val values = recurrencePrefixStorageChanges(rule, requireNotNull(current.rawStartDate))
+        addStoredTimingSelection(parts, args, current)
+        val values = recurrencePrefixStorageChanges(rule, requireNotNull(current.rawStartDate),
+            current.rawEndDate, current.duration)
         if (omitDtstartForTesting) {
             values.remove(Events.DTSTART)
-            Log.w("KeepCalFaultInjection", "split-dtstart-omission attempt calendar=$calendarId root=$eventId")
+            NativeDiagnostics.record(ProviderDiagnostic.splitExperiment) { mapOf(DiagnosticField.calendar to calendar(calendarId), DiagnosticField.root to event(eventId)) }
         }
         return ContentProviderOperation.newUpdate(Events.CONTENT_URI)
             .withSelection(parts.joinToString(" AND "), args.toTypedArray())
@@ -4952,7 +4788,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (event == null) {
                 finishWithError(
                     EC.GENERIC_ERROR,
-                    EM.CREATE_EVENT_ARGUMENTS_NOT_VALID_MESSAGE,
                     pendingChannelResult
                 )
                 return
@@ -4962,7 +4797,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (calendar == null) {
                 finishWithError(
                     EC.NOT_FOUND,
-                    "Couldn't retrieve the Calendar with ID $calendarId",
                     pendingChannelResult
                 )
                 return
@@ -5136,7 +4970,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             end = event.eventEndDate!!
             endTimeZone = getTimeZone(event.eventEndTimeZone).id
         }
-        values.put(Events.DTEND, end)
+        // Canonical recurring storage is NULL + DURATION, not the zero
+        // sentinel tolerated on provider reads.
+        if (end == null) values.putNull(Events.DTEND) else values.put(Events.DTEND, end)
         values.put(Events.EVENT_END_TIMEZONE, endTimeZone)
         values.put(Events.DURATION, duration)
         values.put(Events.EVENT_COLOR_KEY, event.eventColorKey)
@@ -5254,7 +5090,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (existingCal == null) {
                 finishWithError(
                     EC.NOT_FOUND,
-                    "The calendar with the ID $calendarId could not be found",
                     pendingChannelResult
                 )
                 return
@@ -5263,7 +5098,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (existingCal.isReadOnly) {
                 finishWithError(
                     EC.NOT_ALLOWED,
-                    "Calendar with ID $calendarId is read-only",
                     pendingChannelResult
                 )
                 return
@@ -5273,7 +5107,6 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (eventIdNumber == null) {
                 finishWithError(
                     EC.INVALID_ARGUMENT,
-                    EM.EVENT_ID_CANNOT_BE_NULL_ON_DELETION_MESSAGE,
                     pendingChannelResult
                 )
                 return
@@ -5281,18 +5114,18 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
             val resolver = _context?.contentResolver
             if (resolver == null) {
-                finishWithError(EC.NOT_FOUND, "Calendar provider unavailable", pendingChannelResult)
+                finishWithError(EC.NOT_FOUND, pendingChannelResult)
                 return
             }
             val current = queryStoredEventChangeValues(resolver, calendarId, eventId)
             if (current == null || current.deleted) {
-                finishWithError(EC.NOT_FOUND, "The event no longer exists", pendingChannelResult)
+                finishWithError(EC.NOT_FOUND, pendingChannelResult)
                 return
             }
             val scoped = startDate != null || endDate != null || followingInstances != null
             if (scoped && (startDate == null || endDate == null || followingInstances == null ||
                     current.recurrenceRule == null || current.rawStartDate == null)) {
-                finishWithError(EC.INVALID_ARGUMENT, "Scoped deletion requires a master and an exact original slot", pendingChannelResult)
+                finishWithError(EC.INVALID_ARGUMENT, pendingChannelResult)
                 return
             }
             val operations = arrayListOf<ContentProviderOperation>()
@@ -5318,7 +5151,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
             if (one && matching.isEmpty()) {
                 val syncId = queryMasterSyncId(resolver, eventIdNumber)
                 if (syncId.isNullOrBlank() || syncId.startsWith("SYNC_ERROR:")) {
-                    finishWithError("425", "Exception creation is waiting for master sync identity", pendingChannelResult)
+                    finishWithError("425", pendingChannelResult)
                     return
                 }
                 guardParts.add("${Events._SYNC_ID} = ?")
@@ -5345,7 +5178,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 } else {
                     if (!recurrenceRuleContainsOccurrenceStart(Rrule(current.recurrenceRule), current.rawStartDate!!,
                             current.rawStartTimeZone ?: "UTC", startDate!!)) {
-                        finishWithError(EC.NOT_ALLOWED, "The original occurrence no longer belongs to this series", pendingChannelResult)
+                        finishWithError(EC.NOT_ALLOWED, pendingChannelResult)
                         return
                     }
                     operations.add(ContentProviderOperation.newInsert(ContentUris.withAppendedId(Events.CONTENT_EXCEPTION_URI, eventIdNumber))
@@ -5356,7 +5189,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 val prefix = recurrenceDeletionPrefix(current.recurrenceRule!!, current.rawStartDate!!,
                     current.rawStartTimeZone ?: "UTC", startDate!!)
                 if (prefix == null) {
-                    finishWithError(EC.NOT_ALLOWED, "The deletion boundary no longer belongs to this series", pendingChannelResult)
+                    finishWithError(EC.NOT_ALLOWED, pendingChannelResult)
                     return
                 }
                 operations.add(guardedRecurrencePrefixUpdate(calendarId, eventId, current, prefix))
@@ -5368,7 +5201,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 resolver.applyBatch(CalendarContract.AUTHORITY, operations)
                 finishWithSuccess(true, pendingChannelResult)
             } catch (_: android.content.OperationApplicationException) {
-                finishWithError("409", "The event changed during deletion; no deletion was applied", pendingChannelResult)
+                finishWithError("409", pendingChannelResult)
             }
 
         } else {
@@ -5550,13 +5383,12 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val masterCalendarId =
             cursor.getLong(Cst.MASTER_EVENT_PROJECTION_CALENDAR_ID_INDEX).toString()
         val start = cursor.getLong(Cst.MASTER_EVENT_PROJECTION_START_INDEX)
-        val end = if (cursor.isNull(Cst.MASTER_EVENT_PROJECTION_END_INDEX)) {
-            start + (parseDurationMillis(
-                cursor.getString(Cst.MASTER_EVENT_PROJECTION_DURATION_INDEX)
-            ) ?: 0L)
-        } else {
-            cursor.getLong(Cst.MASTER_EVENT_PROJECTION_END_INDEX)
-        }
+        val end = resolveStoredEventEndMillis(
+            start,
+            if (cursor.isNull(Cst.MASTER_EVENT_PROJECTION_END_INDEX)) null
+                else cursor.getLong(Cst.MASTER_EVENT_PROJECTION_END_INDEX),
+            cursor.getString(Cst.MASTER_EVENT_PROJECTION_DURATION_INDEX)
+        )
 
         val event = Event()
         event.eventId = eventId.toString()
@@ -5933,7 +5765,7 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
 
         val cursor: Cursor? = contentResolver?.query(uri, projection, selection, selectionArgs, null)
-        cursor?.use {
+        checkNotNull(cursor) { "CalendarProvider returned no Colors cursor" }.use {
             while (it.moveToNext()) {
                 val color = it.getInt(it.getColumnIndexOrThrow(Colors.COLOR))
                 val colorKey = it.getString(it.getColumnIndexOrThrow(Colors.COLOR_KEY))
@@ -5953,6 +5785,25 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         return retrieveColors(accountName, accountType, Colors.TYPE_CALENDAR)
     }
 
+    fun retrieveCalendarColors(accountName: String, accountType: String, result: MethodChannel.Result) {
+        submitWrite(result) { pending ->
+            finishWithSuccess(retrieveCalendarColors(accountName, accountType).map {
+                listOf(it.first, it.second)
+            }, pending)
+        }
+    }
+
+    fun updateCalendarColorVerified(calendarId: Long, key: String?, rawColor: Int?, accountName: String,
+                                   accountType: String, oldColor: Int?, oldKey: String?,
+                                   result: MethodChannel.Result) {
+        submitWrite(result) { pending ->
+            val resolver = checkNotNull(_context?.contentResolver)
+            val saved = CalendarColorWriter(resolver).update(calendarId, key,
+                accountName, accountType, oldColor, oldKey, rawColor)
+            finishWithSuccess(saved, pending)
+        }
+    }
+
     fun updateCalendarColor(calendarId: Long, newColorKey: String?, newColor: Int?,
                             pendingChannelResult: MethodChannel.Result) {
         if (pendingChannelResult !is CalendarWriteResult) {
@@ -5964,8 +5815,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
         val contentResolver: ContentResolver? = _context?.contentResolver
         val uri: Uri = ContentUris.withAppendedId(CalendarContract.Calendars.CONTENT_URI, calendarId)
         val values = ContentValues().apply {
+            require((newColorKey == null) != (newColor == null))
             put(CalendarContract.Calendars.CALENDAR_COLOR_KEY, newColorKey)
-            put(CalendarContract.Calendars.CALENDAR_COLOR, newColor)
+            if (newColor != null) put(CalendarContract.Calendars.CALENDAR_COLOR, newColor)
         }
         val rows = contentResolver?.update(uri, values, null, null)
         finishWithSuccess((rows ?: 0) > 0, pendingChannelResult)
@@ -6006,10 +5858,9 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
 
     private fun finishWithError(
         errorCode: String,
-        errorMessage: String?,
         pendingChannelResult: MethodChannel.Result
     ) {
-        pendingChannelResult.error(errorCode, errorMessage, null)
+        pendingChannelResult.error(errorCode, "Calendar operation failed", null)
         if (pendingChannelResult !is CalendarWriteResult) clearCachedParameters(pendingChannelResult)
     }
 
