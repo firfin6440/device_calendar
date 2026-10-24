@@ -13,6 +13,17 @@ import 'common/channel_constants.dart';
 import 'common/error_codes.dart';
 import 'common/error_messages.dart';
 
+/// Decodes one native range reply. The caller may run this on an isolate, but
+/// must preserve the complete/partial result alongside the surviving rows.
+typedef CalendarRangeEventDecoder = FutureOr<CalendarRangeEventReply> Function(
+    String rawData);
+
+class CalendarRangeEventReply {
+  const CalendarRangeEventReply(this.events, this.complete);
+  final List<Event> events;
+  final bool complete;
+}
+
 /// Provides functionality for working with device calendar(s)
 class DeviceCalendarPlugin {
   static const MethodChannel channel =
@@ -24,6 +35,7 @@ class DeviceCalendarPlugin {
   Future<void>? _nativeDebugLoggingConfiguration;
   bool _nativeDebugLoggingConfigured = false;
   final MethodChannel _methodChannel;
+  final CalendarRangeEventDecoder? _rangeEventDecoder;
 
   /// Emits whenever the platform calendar store reports a change.
   ///
@@ -42,13 +54,17 @@ class DeviceCalendarPlugin {
   }
 
   @visibleForTesting
-  DeviceCalendarPlugin.private() : _methodChannel = channel;
+  DeviceCalendarPlugin.private()
+      : _methodChannel = channel,
+        _rangeEventDecoder = null;
 
   /// Reuse the exact codecs/error mapping with an explicitly owned transport.
   /// The host owns lifetime/recovery. This does not alter the default singleton,
   /// initialize timezones or request calendar permission automatically.
-  DeviceCalendarPlugin.withMethodChannel(MethodChannel methodChannel)
-      : _methodChannel = methodChannel;
+  DeviceCalendarPlugin.withMethodChannel(MethodChannel methodChannel,
+      {CalendarRangeEventDecoder? rangeEventDecoder})
+      : _methodChannel = methodChannel,
+        _rangeEventDecoder = rangeEventDecoder;
 
   Future<void> _ensureNativeDebugLoggingConfigured() async {
     if (!Platform.isAndroid || _nativeDebugLoggingConfigured) return;
@@ -175,50 +191,55 @@ class DeviceCalendarPlugin {
               ChannelConstants.parameterNameEventIds:
                   retrieveEventsParams?.eventIds,
             },
-        /*evaluateResponse: (rawData) => UnmodifiableListView(
-        json
-            .decode(rawData)
-            .map<Event>((decodedEvent) => Event.fromJson(decodedEvent)),
-      ),*/
-        evaluateResponse: (rawData) {
-          final decoded = json.decode(rawData);
-          final rows = decoded is Map
-              ? (() {
-                  if (decoded['complete'] != false ||
-                      decoded['events'] is! List) {
-                    throw const FormatException('Invalid partial range reply');
-                  }
-                  complete = false;
-                  return decoded['events'] as List;
-                })()
-              : decoded as List;
-          final parsed = <Event>[];
-          final unreadableRoots = <String>{};
-          for (final row in rows) {
-            try {
-              parsed.add(Event.fromJson(row as Map<String, dynamic>));
-            } on Object {
-              complete = false;
-              if (row is Map) {
-                final root = row['originalEventId'] ?? row['eventId'];
-                if (root is String && root.isNotEmpty) {
-                  unreadableRoots.add(root);
-                }
-              }
-            }
-          }
-          final survivors = parsed
-              .where((event) => !unreadableRoots
-                  .contains(event.originalEventId ?? event.eventId))
-              .toList(growable: false);
-          if (survivors.length != parsed.length) complete = false;
-          if (survivors.isEmpty && rows.isNotEmpty) {
-            throw const FormatException('All provider rows were unreadable');
-          }
-          return UnmodifiableListView(survivors);
+        evaluateResponse: (rawData) async {
+          final reply = await (_rangeEventDecoder?.call(rawData as String) ??
+              decodeRangeEvents(rawData as String));
+          complete = reply.complete;
+          return UnmodifiableListView(reply.events);
         });
     result.isComplete = complete;
     return result;
+  }
+
+  /// Pure range parser shared by the inline and worker paths. A malformed row
+  /// invalidates its entire provider lineage, never only the row itself.
+  static CalendarRangeEventReply decodeRangeEvents(
+      String rawData) {
+    var complete = true;
+    final decoded = json.decode(rawData);
+    final rows = decoded is Map
+        ? (() {
+            if (decoded['complete'] != false || decoded['events'] is! List) {
+              throw const FormatException('Invalid partial range reply');
+            }
+            complete = false;
+            return decoded['events'] as List;
+          })()
+        : decoded as List;
+    final parsed = <Event>[];
+    final unreadableRoots = <String>{};
+    for (final row in rows) {
+      try {
+        parsed.add(Event.fromJson(row as Map<String, dynamic>));
+      } on Object {
+        complete = false;
+        if (row is Map) {
+          final root = row['originalEventId'] ?? row['eventId'];
+          if (root is String && root.isNotEmpty) {
+            unreadableRoots.add(root);
+          }
+        }
+      }
+    }
+    final survivors = parsed
+        .where((event) => !unreadableRoots
+            .contains(event.originalEventId ?? event.eventId))
+        .toList(growable: false);
+    if (survivors.length != parsed.length) complete = false;
+    if (survivors.isEmpty && rows.isNotEmpty) {
+      throw const FormatException('All provider rows were unreadable');
+    }
+    return CalendarRangeEventReply(survivors, complete);
   }
 
   /// Retrieves one provider event directly by its stable calendar and event
@@ -811,7 +832,7 @@ class DeviceCalendarPlugin {
     String channelMethodName, {
     Function(Result<T>)? assertParameters,
     Map<String, Object?> Function()? arguments,
-    T Function(dynamic)? evaluateResponse,
+    FutureOr<T> Function(dynamic)? evaluateResponse,
   }) async {
     final result = Result<T>();
 
@@ -833,7 +854,7 @@ class DeviceCalendarPlugin {
       );
 
       if (evaluateResponse != null) {
-        result.data = evaluateResponse(rawData);
+        result.data = await evaluateResponse(rawData);
       } else {
         result.data = rawData;
       }
