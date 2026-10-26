@@ -100,6 +100,20 @@ class CalendarRangeReadThreadingTest {
         assertAllWorkOffMainAndClosed()
     }
 
+    @Test fun optInReadTimingReportsOnlyPhasesAndCounts() {
+        org.robolectric.shadows.ShadowLog.clear()
+        val delegate = CalendarDelegate(null, app)
+        delegate.debugLoggingEnabled = true
+        val reply = read(delegate = delegate); await(reply)
+        assertNull(reply.single().error)
+        val logs = org.robolectric.shadows.ShadowLog.getLogsForTag("KeepCalRangeRead").map { it.msg }
+        for (phase in CalendarReadPhase.entries) {
+            assertEquals(1, logs.count { it.matches(Regex("${phase.name}Us=[0-9]+")) })
+        }
+        assertTrue(logs.contains("rows=1 distinctIds=1 attendeeQueries=1 reminderQueries=1 fallbackGroups=0 incomplete=false"))
+        assertEquals(6, logs.size)
+    }
+
     @Test fun calendarQueryFailureIsOneError() = failure("query:calendars")
     @Test fun instancesQueryFailureIsOneError() = failure("query:instances")
     @Test fun attendeesQueryFailureIsOneError() = failure("query:attendees")
@@ -479,10 +493,34 @@ class CalendarRangeReadThreadingTest {
             val id = row["eventId"].asInt
             assertEquals(id, row["reminders"].asJsonArray[0].asJsonObject["minutes"].asInt)
         }
-        assertEquals(3, provider.queries.count { it.path == "attendees" })
-        assertEquals(3, provider.queries.count { it.path == "reminders" })
+        assertEquals(1, provider.queries.count { it.path == "attendees" })
+        assertEquals(1, provider.queries.count { it.path == "reminders" })
         assertAllWorkOffMainAndClosed()
     }
+    @Test fun manyDistinctEventsUseBoundedChildQueriesAndPreserveEveryRow() {
+        provider.instanceIds = (701L..901L).toList() + listOf(701L, 801L)
+        provider.childrenById = true
+        val reply = read(); await(reply)
+        assertNull(reply.single().error)
+        val rows = JsonParser.parseString(reply.single().value as String).asJsonArray
+        assertEquals(203, rows.size())
+        rows.forEach { value ->
+            val row = value.asJsonObject
+            assertEquals(row["eventId"].asInt,
+                row["reminders"].asJsonArray.single().asJsonObject["minutes"].asInt)
+            assertEquals(1, row["attendees"].asJsonArray.size())
+        }
+        for (path in listOf("attendees", "reminders")) {
+            val queries = provider.queries.filter { it.path == path }
+            assertEquals(3, queries.size)
+            assertEquals(listOf(100, 100, 1), queries.map { it.args!!.size })
+            assertEquals((701L..901L).toList(), queries.flatMap { it.args!!.map(String::toLong) })
+        }
+        assertAllWorkOffMainAndClosed()
+    }
+    @Test fun attendeeReadsCannotBlockTheMainLooper() = heartbeat("attendees")
+    @Test fun reminderReadsCannotBlockTheMainLooper() = heartbeat("reminders")
+
     @Test fun emptyChildrenAreAlsoReusedWithinRead() {
         provider.instanceIds = List(5) { 701L }; provider.emptyPath = "attendees"
         val reply = read(); await(reply)
@@ -694,8 +732,11 @@ class CalendarRangeReadThreadingTest {
                 if (failAfterGate) throw IllegalStateException("held-query-failed")
             }
             if (failAt == "query:$path") throw IllegalStateException(failAt)
-            if (path == "reminders" && failChildId != null &&
-                selection?.contains("= $failChildId") == true) {
+            val childIds = if (path in setOf("attendees", "reminders")) {
+                selectionArgs?.map { it.toLong() }
+                    ?: listOf(selection!!.substringAfter("= ").substringBefore(")").toLong())
+            } else emptyList()
+            if (path == "reminders" && failChildId in childIds) {
                 throw IllegalStateException("reminder query failed for $failChildId")
             }
             if (revoke && path in setOf("instances", "events")) throw SecurityException("calendar permission revoked")
@@ -705,7 +746,8 @@ class CalendarRangeReadThreadingTest {
                 val count = when (path) {
                     "calendars" -> calendarCount
                     "instances" -> instanceIds?.size ?: 1
-                    "attendees" -> ownerStatuses.size
+                    "attendees" -> childIds.size * ownerStatuses.size
+                    "reminders" -> childIds.size
                     else -> 1
                 }
                 for (index in 0 until count) {
@@ -723,9 +765,9 @@ class CalendarRangeReadThreadingTest {
                         "dtend" to slot - 82800000, "eventTimezone" to "Europe/London",
                         "eventEndTimezone" to "Europe/London", "_sync_id" to "remote-701",
                         "selfAttendeeStatus" to 4, "rrule" to "FREQ=DAILY;COUNT=3")
-                    "attendees" -> mapOf("attendeeName" to "Me", "attendeeEmail" to "me@example.com",
-                        "attendeeType" to 1, "attendeeStatus" to ownerStatuses[index], "attendeeRelationship" to 2)
-                    "reminders" -> mapOf("minutes" to (if (childrenById) selection!!.substringAfter("= ").substringBefore(")").toInt() else reminderMinutes), "method" to 1)
+                    "attendees" -> mapOf("event_id" to childIds[index / ownerStatuses.size], "attendeeName" to "Me", "attendeeEmail" to "me@example.com",
+                        "attendeeType" to 1, "attendeeStatus" to ownerStatuses[index % ownerStatuses.size], "attendeeRelationship" to 2)
+                    "reminders" -> mapOf("event_id" to childIds[index], "minutes" to (if (childrenById) childIds[index].toInt() else reminderMinutes), "method" to 1)
                     else -> error("Unexpected provider query: $uri")
                 }
                 matrix.addRow(projection.map { values[it] }.toTypedArray())

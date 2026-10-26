@@ -453,7 +453,10 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 (pendingChannelResult as? CalendarInvocationFence)?.checkCalendarInvocation()
                 // The old retrieveCalendar helper owns replies/permission-cache
                 // mutation. It must not be called from this worker.
-                val calendar = readCalendarForEventRange(calendarId, contentResolver)
+                val readLogging = debugLoggingEnabled
+                val calendar = calendarReadPhase(CalendarReadPhase.metadata, readLogging) {
+                    readCalendarForEventRange(calendarId, contentResolver)
+                }
                 if (calendar == null) {
                     uiThreadHandler.post {
                         finishWithError(EC.NOT_FOUND, pendingChannelResult)
@@ -469,64 +472,75 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                 val events = mutableListOf<Event>()
                 var incomplete = false
                 var firstRowFailure: Exception? = null
-                try {
-                    contentResolver?.query(
-                        eventsUriBuilder.build(),
-                        Cst.EVENT_PROJECTION,
-                        instanceQuery.selection,
-                        instanceQuery.selectionArgs,
-                        Events.DTSTART + " DESC"
-                    ).use { cursor ->
-                        checkNotNull(cursor) { "CalendarProvider returned no Instances cursor" }
-                        while (cursor.moveToNext()) {
-                            try {
-                                val event = parseEvent(calendarId, cursor)
-                                if (event == null) incomplete = true else events.add(event)
-                            } catch (error: Exception) {
-                                if (error is SecurityException) throw error
-                                // Bad row content must not discard independent rows
-                                // returned by the same physical Instances query.
-                                // Do not whitelist parser exception classes: an
-                                // unexpected row failure has the same locality.
-                                incomplete = true
-                                if (firstRowFailure == null) firstRowFailure = error
+                calendarReadPhase(CalendarReadPhase.instances, readLogging) {
+                    try {
+                        contentResolver?.query(
+                            eventsUriBuilder.build(),
+                            Cst.EVENT_PROJECTION,
+                            instanceQuery.selection,
+                            instanceQuery.selectionArgs,
+                            Events.DTSTART + " DESC"
+                        ).use { cursor ->
+                            checkNotNull(cursor) { "CalendarProvider returned no Instances cursor" }
+                            while (cursor.moveToNext()) {
+                                try {
+                                    val event = parseEvent(calendarId, cursor)
+                                    if (event == null) incomplete = true else events.add(event)
+                                } catch (error: Exception) {
+                                    if (error is SecurityException) throw error
+                                    // Bad row content must not discard independent rows
+                                    // returned by the same physical Instances query.
+                                    // Do not whitelist parser exception classes: an
+                                    // unexpected row failure has the same locality.
+                                    incomplete = true
+                                    if (firstRowFailure == null) firstRowFailure = error
+                                }
                             }
                         }
+                    } catch (error: Exception) {
+                        // A cursor can fail *after* yielding useful rows. Those
+                        // rows remain positive evidence, but its missing tail is
+                        // never absence evidence. Query/permission failure before
+                        // the first row remains a failed acquisition.
+                        if (error is SecurityException || events.isEmpty()) throw error
+                        incomplete = true
+                        if (firstRowFailure == null) firstRowFailure = error
                     }
-                } catch (error: Exception) {
-                    // A cursor can fail *after* yielding useful rows. Those
-                    // rows remain positive evidence, but its missing tail is
-                    // never absence evidence. Query/permission failure before
-                    // the first row remains a failed acquisition.
-                    if (error is SecurityException || events.isEmpty()) throw error
-                    incomplete = true
-                    if (firstRowFailure == null) firstRowFailure = error
                 }
-                // Attendees/Reminders are keyed by physical Events ID, not
-                // occurrence time. Reuse only within this read; no evidence
-                // cache across requests, edits or CalendarProvider signals.
-                val attendeesById = mutableMapOf<String, List<Attendee>>()
-                val remindersById = mutableMapOf<String, List<Reminder>>()
-                val unreadableIds = mutableSetOf<String>()
+                // Group child queries by physical Events ID. The helper accepts
+                // only complete groups and falls back per ID on provider faults.
+                // Per-occurrence self status is still applied independently.
+                val ids = events.map { it.eventId!! }.distinct()
+                val attendeeRead = calendarReadPhase(CalendarReadPhase.attendees, readLogging) {
+                    readCalendarChildren(contentResolver,
+                        CalendarContract.Attendees.CONTENT_URI, Cst.ATTENDEE_PROJECTION, ids) {
+                        parseAttendeeRow(calendar, it)
+                    }
+                }
+                val reminderRead = calendarReadPhase(CalendarReadPhase.reminders, readLogging) {
+                    readCalendarChildren(contentResolver,
+                        CalendarContract.Reminders.CONTENT_URI, Cst.REMINDER_PROJECTION,
+                        ids.filterNot { it in attendeeRead.unreadableIds }) {
+                        parseReminderRow(it)
+                    }
+                }
+                val unreadableIds = (attendeeRead.unreadableIds + reminderRead.unreadableIds).toMutableSet()
+                if (unreadableIds.isNotEmpty()) {
+                    incomplete = true
+                    if (firstRowFailure == null) {
+                        firstRowFailure = attendeeRead.firstFailure ?: reminderRead.firstFailure
+                    }
+                }
                 for (event in events) {
                     val id = event.eventId!!
                     if (id in unreadableIds) continue
                     try {
-                        val rawAttendees = attendeesById.getOrPut(id) {
-                            retrieveAttendees(calendar, id, contentResolver,
-                                requireCompleteRead = true)
-                        }
                         val attendees = attendeesWithAuthoritativeSelfStatus(
-                            rawAttendees,
-                            calendar.ownerAccount,
-                            event.selfAttendeeStatus
-                        )
-                        event.organizer =
-                            attendees.firstOrNull { it.isOrganizer != null && it.isOrganizer }
+                            attendeeRead.rowsById.getValue(id), calendar.ownerAccount,
+                            event.selfAttendeeStatus)
+                        event.organizer = attendees.firstOrNull { it.isOrganizer == true }
                         event.attendees = attendees
-                        event.reminders = remindersById.getOrPut(id) {
-                            retrieveReminders(id, contentResolver, requireCompleteRead = true)
-                        }.toMutableList()
+                        event.reminders = reminderRead.rowsById.getValue(id).toMutableList()
                     } catch (error: Exception) {
                         if (error is SecurityException) throw error
                         incomplete = true
@@ -556,29 +570,36 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                             )
                         }
                 }
-                val json = try {
-                    gson?.toJson(
-                        if (incomplete) mapOf("complete" to false, "events" to events)
-                        else events
-                    )
-                } catch (error: Exception) {
-                    // A serializer failure may belong to one provider event.
-                    // Retry independently and never emit a successful empty
-                    // result when all rows prove unreadable.
-                    val survivors = com.google.gson.JsonArray()
-                    for (event in events) {
-                        try {
-                            survivors.add(gson!!.toJsonTree(event))
-                        } catch (_: Exception) {
-                            incomplete = true
+                val json = calendarReadPhase(CalendarReadPhase.serialization, readLogging) {
+                    try {
+                        gson?.toJson(
+                            if (incomplete) mapOf("complete" to false, "events" to events)
+                            else events
+                        )
+                    } catch (error: Exception) {
+                        // A serializer failure may belong to one provider event.
+                        // Retry independently and never emit a successful empty
+                        // result when all rows prove unreadable.
+                        val survivors = com.google.gson.JsonArray()
+                        for (event in events) {
+                            try {
+                                survivors.add(gson!!.toJsonTree(event))
+                            } catch (_: Exception) {
+                                incomplete = true
+                            }
                         }
+                        if (survivors.size() == 0) throw error
+                        com.google.gson.JsonObject().apply {
+                            addProperty("complete", false)
+                            add("events", survivors)
+                        }.toString()
                     }
-                    if (survivors.size() == 0) throw error
-                    com.google.gson.JsonObject().apply {
-                        addProperty("complete", false)
-                        add("events", survivors)
-                    }.toString()
                 }
+                if (readLogging) android.util.Log.d("KeepCalRangeRead",
+                    "rows=${events.size} distinctIds=${ids.size} " +
+                    "attendeeQueries=${attendeeRead.queryCount} reminderQueries=${reminderRead.queryCount} " +
+                    "fallbackGroups=${attendeeRead.fallbackGroups + reminderRead.fallbackGroups} " +
+                    "incomplete=$incomplete")
                 // Post only the prepared result. All cursor cleanup has completed,
                 // including on error, before main-thread reply/cache bookkeeping.
                 uiThreadHandler.post {

@@ -119,3 +119,34 @@ For iOS 17+ support, add the following key/value pair as well.
 ```
 
 Note that on iOS, this is a Swift plugin. There is a known issue being tracked [here](https://github.com/flutter/flutter/issues/16049) by the Flutter team, where adding a plugin developed in Swift to an Objective-C project causes problems. If you run into such issues, please look at the suggested workarounds there.
+
+
+## KeepCal Android range-read child batching
+
+`CalendarDelegate.retrieveEvents` reads attendee/reminder rows in groups of up
+to 100 distinct physical Events IDs, on its existing IO dispatcher. IDs use
+selection arguments. Multiple recurrence instances share physical children;
+detached exceptions keep their own IDs and each occurrence still applies its
+authoritative self-attendee status. No children are cached between requests.
+
+`CalendarChildRead` accepts a group only after EOF and successful cursor close.
+A non-permission failure discards the group's staged rows and retries its IDs
+individually. Failed IDs are quarantined from the existing partial range reply;
+complete neighbors survive. A completely unreadable range fails. Security
+failures (including suppressed close failures) abort without fallback. This
+preserves partial-read evidence; separate queries do not constitute an atomic
+provider snapshot. The direct single-event/mutation paths are unchanged.
+
+Native system traces expose `KeepCal.provider.metadata`, `.instances`,
+`.attendees`, `.reminders`, and `.serialization`. With the existing debug logging
+switch enabled, `KeepCalRangeRead` logs microsecond phase durations and numeric
+row/query/fallback counts, without event contents. Native trace slices require
+system Perfetto; they are not automatically Dart DevTools timeline events.
+
+`CalendarChildReadTest` exercises actual SQLite predicates/ownership, bounded
+queries, duplicate and empty child lists, failed cursors, fallback, permission
+revocation and external edits. `CalendarRangeReadThreadingTest` exercises the
+production delegate, channel replies, per-occurrence status, partial results,
+query counts and main-looper responsiveness. Test query reduction is not a
+measurement of OEM provider latency. Android rebuild and device profiling are
+required to assess the user-visible benefit.
