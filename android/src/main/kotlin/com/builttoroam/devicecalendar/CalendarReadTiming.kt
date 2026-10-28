@@ -1,7 +1,7 @@
 package com.builttoroam.devicecalendar
 
 import android.os.Trace
-import android.util.Log
+import com.builttoroam.devicecalendar.diagnostics.*
 
 /** Fixed phase labels only: never include event IDs, dates or calendar content.
  * Trace sections are native system-trace slices; optional logs report durations
@@ -17,6 +17,9 @@ internal inline fun <T> calendarReadPhase(
         return block()
     } finally {
         Trace.endSection()
-        if (logging) Log.d("KeepCalRangeRead", "${phase.name}Us=${(System.nanoTime() - start) / 1000}")
+        NativeDiagnostics.record(ProviderDiagnostic.rangeReadPhase, enabled = logging) {
+            mapOf(DiagnosticField.stage to state(phase),
+                DiagnosticField.elapsedUs to count((System.nanoTime() - start) / 1000))
+        }
     }
 }

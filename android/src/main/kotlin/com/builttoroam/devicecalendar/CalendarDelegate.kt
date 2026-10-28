@@ -595,11 +595,14 @@ class CalendarDelegate(binding: ActivityPluginBinding?, context: Context) :
                         }.toString()
                     }
                 }
-                if (readLogging) android.util.Log.d("KeepCalRangeRead",
-                    "rows=${events.size} distinctIds=${ids.size} " +
-                    "attendeeQueries=${attendeeRead.queryCount} reminderQueries=${reminderRead.queryCount} " +
-                    "fallbackGroups=${attendeeRead.fallbackGroups + reminderRead.fallbackGroups} " +
-                    "incomplete=$incomplete")
+                NativeDiagnostics.record(ProviderDiagnostic.rangeReadSummary, enabled = readLogging) {
+                    mapOf(DiagnosticField.rows to count(events.size),
+                        DiagnosticField.distinctIds to count(ids.size),
+                        DiagnosticField.attendeeQueries to count(attendeeRead.queryCount),
+                        DiagnosticField.reminderQueries to count(reminderRead.queryCount),
+                        DiagnosticField.fallbackGroups to count(attendeeRead.fallbackGroups + reminderRead.fallbackGroups),
+                        DiagnosticField.incomplete to flag(incomplete))
+                }
                 // Post only the prepared result. All cursor cleanup has completed,
                 // including on error, before main-thread reply/cache bookkeeping.
                 uiThreadHandler.post {

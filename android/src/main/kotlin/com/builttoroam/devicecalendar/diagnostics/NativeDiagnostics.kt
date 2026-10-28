@@ -13,7 +13,8 @@ enum class DiagnosticField { id, calendar, root, repair, stage, operation, outco
     deleted, changed, sourceCount, destinationCount, insertedCount, restoredCount,
     removedCount, titleChanged, locationChanged, durationChanged, timeChanged,
     colorChanged, index, session, boundary, calls, runtime, installed, resolved,
-    attached, allowed, persisted }
+    attached, allowed, persisted, elapsedUs, rows, distinctIds, attendeeQueries,
+    reminderQueries, fallbackGroups, incomplete }
 enum class DiagnosticStep { unknown, describe, status, arm, wake, disarm, apply,
     due, dismiss, snooze, maintenance, delivered, skipped, uncertain, rejected,
     applied, schedule, cancel, post, update, IDLE, SCHEDULED, RETRY,
@@ -77,6 +78,7 @@ object NativeDiagnostics {
 }
 
 enum class ProviderDiagnostic {
+    rangeReadPhase, rangeReadSummary,
     metadataRowFailed, metadataReadFailed, recurrencePruned, seriesMoved,
     exceptionsReset, masterSnapshot, exceptionSnapshot, snapshotFailed,
     splitExperiment, splitExperimentReadFailed, splitExperimentConfigured,

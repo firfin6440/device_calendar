@@ -106,12 +106,37 @@ class CalendarRangeReadThreadingTest {
         delegate.debugLoggingEnabled = true
         val reply = read(delegate = delegate); await(reply)
         assertNull(reply.single().error)
-        val logs = org.robolectric.shadows.ShadowLog.getLogsForTag("KeepCalRangeRead").map { it.msg }
+        val logs = org.robolectric.shadows.ShadowLog.getLogsForTag("KeepCalDiagnostics")
+            .map { it.msg }.filter { it.startsWith("rangeRead") }
         for (phase in CalendarReadPhase.entries) {
-            assertEquals(1, logs.count { it.matches(Regex("${phase.name}Us=[0-9]+")) })
+            assertEquals(1, logs.count { it.matches(Regex("rangeReadPhase \\{stage=${phase.name}, elapsedUs=[0-9]+\\}")) })
         }
-        assertTrue(logs.contains("rows=1 distinctIds=1 attendeeQueries=1 reminderQueries=1 fallbackGroups=0 incomplete=false"))
+        assertTrue(logs.contains("rangeReadSummary {rows=1, distinctIds=1, attendeeQueries=1, reminderQueries=1, fallbackGroups=0, incomplete=false}"))
         assertEquals(6, logs.size)
+        assertTrue(org.robolectric.shadows.ShadowLog.getLogsForTag("KeepCalRangeRead").isEmpty())
+        for (privateValue in listOf("ordinary fixture", "remote-701", "1789482600000")) {
+            assertFalse(logs.any { it.contains(privateValue) })
+        }
+    }
+
+    @Test fun brokenReadDiagnosticSinkCannotTurnSuccessfulReadIntoError() {
+        val previous = org.robolectric.shadows.ShadowLog.stream
+        val attempts = java.util.concurrent.atomic.AtomicInteger()
+        org.robolectric.shadows.ShadowLog.stream = java.io.PrintStream(object : java.io.OutputStream() {
+            override fun write(value: Int) {
+                attempts.incrementAndGet()
+                throw IllegalStateException("broken console")
+            }
+        })
+        try {
+            val delegate = CalendarDelegate(null, app)
+            delegate.debugLoggingEnabled = true
+            val reply = read(delegate = delegate); await(reply)
+            assertNull(reply.single().error)
+            assertEquals(1, JsonParser.parseString(reply.single().value as String).asJsonArray.size())
+            assertTrue("Five phase logs plus the summary must exercise the sink", attempts.get() >= 6)
+            assertAllWorkOffMainAndClosed()
+        } finally { org.robolectric.shadows.ShadowLog.stream = previous }
     }
 
     @Test fun calendarQueryFailureIsOneError() = failure("query:calendars")
